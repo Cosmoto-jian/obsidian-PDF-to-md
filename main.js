@@ -78,6 +78,78 @@ var PdfToMdPlugin = class extends import_obsidian.Plugin {
     );
   }
 };
+var CONVERSION_MODES = [
+  {
+    id: "fast",
+    name: "Fast Mode",
+    description: "Quick conversion with basic formatting",
+    options: { format: "markdown" }
+  },
+  {
+    id: "hybrid",
+    name: "Hybrid Mode (Recommended)",
+    description: "AI-powered conversion with better layout detection",
+    options: {
+      format: "markdown",
+      hybrid: "docling-fast",
+      hybridMode: "auto",
+      hybridFallback: true
+    }
+  },
+  {
+    id: "hybrid-ocr",
+    name: "Hybrid + OCR",
+    description: "AI conversion with OCR for scanned documents",
+    options: {
+      format: "markdown",
+      hybrid: "docling-fast",
+      hybridMode: "full",
+      hybridFallback: true,
+      sanitize: true
+    }
+  },
+  {
+    id: "hybrid-formula",
+    name: "Hybrid + Formula",
+    description: "Enhanced math formula detection and conversion",
+    options: {
+      format: "markdown",
+      hybrid: "docling-fast",
+      hybridMode: "auto",
+      hybridFallback: true,
+      useStructTree: true
+    }
+  },
+  {
+    id: "hybrid-picture",
+    name: "Hybrid + Picture",
+    description: "Better image extraction and handling",
+    options: {
+      format: "markdown",
+      hybrid: "docling-fast",
+      hybridMode: "auto",
+      hybridFallback: true,
+      imageOutput: "external",
+      imageFormat: "png"
+    }
+  },
+  {
+    id: "hybrid-all",
+    name: "Hybrid + Complete",
+    description: "Maximum quality with all enhancements",
+    options: {
+      format: "markdown",
+      hybrid: "docling-fast",
+      hybridMode: "full",
+      hybridFallback: true,
+      useStructTree: true,
+      imageOutput: "external",
+      imageFormat: "png",
+      sanitize: true,
+      detectStrikethrough: true
+    }
+  }
+];
 var JAR_NAME = "opendataloader-pdf-cli.jar";
 function getJarPath() {
   const pluginDir = "/Users/waltry/Library/Mobile Documents/iCloud~md~obsidian/Documents/.obsidian/plugins/obsidian-PDF-to-md";
@@ -216,6 +288,8 @@ var ConvertModal = class extends import_obsidian.Modal {
     __publicField(this, "nameInput");
     __publicField(this, "statusEl");
     __publicField(this, "convertBtn");
+    __publicField(this, "modeSelect");
+    __publicField(this, "folderInput");
     this.file = file;
   }
   onOpen() {
@@ -245,6 +319,30 @@ var ConvertModal = class extends import_obsidian.Modal {
     this.nameInput.value = this.file.basename;
     inputRow.createEl("span", { cls: "pcm-ext", text: ".md" });
     this.nameInput.addEventListener("focus", () => this.nameInput.select());
+    const folderField = contentEl.createDiv("pcm-field");
+    folderField.createEl("label", { cls: "pcm-label", text: "Output folder (optional)", attr: { for: "pcm-folder" } });
+    const folderInputRow = folderField.createDiv("pcm-input-row");
+    this.folderInput = folderInputRow.createEl("input", {
+      cls: "pcm-input",
+      attr: { id: "pcm-folder", type: "text", placeholder: "e.g., converted-pdfs" }
+    });
+    const modeField = contentEl.createDiv("pcm-field");
+    modeField.createEl("label", { cls: "pcm-label", text: "Conversion Mode", attr: { for: "pcm-mode" } });
+    this.modeSelect = modeField.createEl("select", { cls: "pcm-select", attr: { id: "pcm-mode" } });
+    CONVERSION_MODES.forEach((mode) => {
+      const option = this.modeSelect.createEl("option", {
+        value: mode.id,
+        text: mode.name
+      });
+      if (mode.id === "hybrid") {
+        option.selected = true;
+      }
+    });
+    const modeDesc = modeField.createEl("div", { cls: "pcm-mode-desc" });
+    this.updateModeDescription();
+    this.modeSelect.addEventListener("change", () => {
+      this.updateModeDescription();
+    });
     this.statusEl = contentEl.createDiv("pcm-status pcm-status-idle");
     this.statusEl.textContent = "Ready";
     const actions = contentEl.createDiv("pcm-actions");
@@ -254,12 +352,29 @@ var ConvertModal = class extends import_obsidian.Modal {
       if (e.key === "Enter")
         this.runConvert();
     });
+    this.folderInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter")
+        this.runConvert();
+    });
     const cancelBtn = actions.createEl("button", { cls: "pcm-btn pcm-btn-secondary", text: "Cancel" });
     cancelBtn.onclick = () => this.close();
     setTimeout(() => this.nameInput.focus(), 50);
   }
+  updateModeDescription() {
+    const selectedMode = CONVERSION_MODES.find((mode) => mode.id === this.modeSelect.value);
+    if (selectedMode) {
+      const existingDesc = this.modeSelect.nextElementSibling;
+      if (existingDesc && existingDesc.classList.contains("pcm-mode-desc")) {
+        existingDesc.remove();
+      }
+      const descEl = this.modeSelect.parentElement.createEl("div", {
+        cls: "pcm-mode-desc",
+        text: selectedMode.description
+      });
+    }
+  }
   async runConvert() {
-    var _a, _b, _c;
+    var _a, _b, _c, _d, _e;
     const rawName = (_b = (_a = this.nameInput) == null ? void 0 : _a.value) == null ? void 0 : _b.trim();
     if (!rawName) {
       this.setStatus("error", "Please enter a filename");
@@ -273,10 +388,21 @@ var ConvertModal = class extends import_obsidian.Modal {
         this.nameInput.focus();
       return;
     }
+    const outputFolder = (_d = (_c = this.folderInput) == null ? void 0 : _c.value) == null ? void 0 : _d.trim();
+    if (outputFolder && /[/\\:*?"<>|]/.test(outputFolder)) {
+      this.setStatus("error", 'Folder name contains invalid characters: / \\ : * ? " < > |');
+      if (this.folderInput)
+        this.folderInput.focus();
+      return;
+    }
     if (this.convertBtn)
       this.convertBtn.disabled = true;
     if (this.nameInput)
       this.nameInput.disabled = true;
+    if (this.folderInput)
+      this.folderInput.disabled = true;
+    if (this.modeSelect)
+      this.modeSelect.disabled = true;
     this.setStatus("converting", "Checking system requirements...");
     try {
       this.setStatus("converting", "Checking Java installation...");
@@ -307,6 +433,13 @@ var ConvertModal = class extends import_obsidian.Modal {
       if (!vaultPath || typeof vaultPath !== "string") {
         throw new Error(`Invalid vault path: ${vaultPath}`);
       }
+      let outputDir = vaultPath;
+      if (outputFolder) {
+        outputDir = path.join(vaultPath, outputFolder);
+        if (!fs.existsSync(outputDir)) {
+          fs.mkdirSync(outputDir, { recursive: true });
+        }
+      }
       if (!this.file.path || typeof this.file.path !== "string") {
         throw new Error(`Invalid file path: ${this.file.path}`);
       }
@@ -314,13 +447,15 @@ var ConvertModal = class extends import_obsidian.Modal {
       if (!fs.existsSync(pdfAbs)) {
         throw new Error(`PDF file not found: ${pdfAbs}`);
       }
-      this.setStatus("converting", "Converting PDF to Markdown...");
-      const result = await convert([pdfAbs], {
-        outputDir: vaultPath,
-        format: "markdown",
+      const selectedMode = CONVERSION_MODES.find((mode) => mode.id === this.modeSelect.value) || CONVERSION_MODES[1];
+      this.setStatus("converting", `Converting with ${selectedMode.name}...`);
+      const conversionOptions = {
+        ...selectedMode.options,
+        outputDir,
         quiet: false
-      });
-      const expectedMdPath = path.join(vaultPath, this.file.basename + ".md");
+      };
+      const result = await convert([pdfAbs], conversionOptions);
+      const expectedMdPath = path.join(outputDir, this.file.basename + ".md");
       if (!fs.existsSync(expectedMdPath)) {
         throw new Error(
           `Conversion completed but no .md file was created.
@@ -329,7 +464,7 @@ Expected file: ${expectedMdPath}
 Please check if the PDF file is valid and try again.`
         );
       }
-      const targetMd = path.join(vaultPath, rawName + ".md");
+      const targetMd = path.join(outputDir, rawName + ".md");
       if (expectedMdPath !== targetMd) {
         fs.renameSync(expectedMdPath, targetMd);
       }
@@ -337,11 +472,12 @@ Please check if the PDF file is valid and try again.`
         await this.app.vault.adapter.list("/");
       } catch (e) {
       }
-      this.setStatus("done", `Saved as ${rawName}.md`);
-      new import_obsidian.Notice(`\u2705 Successfully converted to ${rawName}.md`);
+      const outputLocation = outputFolder ? `${outputFolder}/${rawName}.md` : `${rawName}.md`;
+      this.setStatus("done", `Saved as ${outputLocation}`);
+      new import_obsidian.Notice(`\u2705 Successfully converted to ${outputLocation}`);
       setTimeout(() => this.close(), 1800);
     } catch (e) {
-      let errorMessage = (_c = e.message) != null ? _c : "Conversion failed";
+      let errorMessage = (_e = e.message) != null ? _e : "Conversion failed";
       if (errorMessage.includes("java")) {
         errorMessage = "Java is required but not installed. Please install Java Runtime Environment.";
       } else if (errorMessage.includes("JAR file not found") || errorMessage.includes("Could not locate")) {
@@ -355,6 +491,10 @@ Please check if the PDF file is valid and try again.`
         this.convertBtn.disabled = false;
       if (this.nameInput)
         this.nameInput.disabled = false;
+      if (this.folderInput)
+        this.folderInput.disabled = false;
+      if (this.modeSelect)
+        this.modeSelect.disabled = false;
       if (this.convertBtn)
         this.convertBtn.textContent = "Retry";
     }

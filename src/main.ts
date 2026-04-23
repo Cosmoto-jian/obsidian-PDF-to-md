@@ -1,4 +1,4 @@
-import { App, Plugin, Modal, TFile, Notice } from "obsidian";
+import { App, Plugin, Modal, TFile, Notice, Setting } from "obsidian";
 import * as path from "path";
 import * as fs from "fs";
 import { execSync, spawn } from "child_process";
@@ -52,12 +52,92 @@ export default class PdfToMdPlugin extends Plugin {
   }
 }
 
+// ─── Conversion Modes ────────────────────────────────────────────────────────
+
+interface ConversionMode {
+  id: string;
+  name: string;
+  description: string;
+  options: any;
+}
+
+const CONVERSION_MODES: ConversionMode[] = [
+  {
+    id: "fast",
+    name: "Fast Mode",
+    description: "Quick conversion with basic formatting",
+    options: { format: "markdown" }
+  },
+  {
+    id: "hybrid",
+    name: "Hybrid Mode (Recommended)",
+    description: "AI-powered conversion with better layout detection",
+    options: {
+      format: "markdown",
+      hybrid: "docling-fast",
+      hybridMode: "auto",
+      hybridFallback: true
+    }
+  },
+  {
+    id: "hybrid-ocr",
+    name: "Hybrid + OCR",
+    description: "AI conversion with OCR for scanned documents",
+    options: {
+      format: "markdown",
+      hybrid: "docling-fast",
+      hybridMode: "full",
+      hybridFallback: true,
+      sanitize: true
+    }
+  },
+  {
+    id: "hybrid-formula",
+    name: "Hybrid + Formula",
+    description: "Enhanced math formula detection and conversion",
+    options: {
+      format: "markdown",
+      hybrid: "docling-fast",
+      hybridMode: "auto",
+      hybridFallback: true,
+      useStructTree: true
+    }
+  },
+  {
+    id: "hybrid-picture",
+    name: "Hybrid + Picture",
+    description: "Better image extraction and handling",
+    options: {
+      format: "markdown",
+      hybrid: "docling-fast",
+      hybridMode: "auto",
+      hybridFallback: true,
+      imageOutput: "external",
+      imageFormat: "png"
+    }
+  },
+  {
+    id: "hybrid-all",
+    name: "Hybrid + Complete",
+    description: "Maximum quality with all enhancements",
+    options: {
+      format: "markdown",
+      hybrid: "docling-fast",
+      hybridMode: "full",
+      hybridFallback: true,
+      useStructTree: true,
+      imageOutput: "external",
+      imageFormat: "png",
+      sanitize: true,
+      detectStrikethrough: true
+    }
+  }
+];
+
 // ─── Fixed PDF conversion functions ──────────────────────────────────────────
-// Fixed version of @opendataloader/pdf that works in Electron environments
 
 const JAR_NAME = "opendataloader-pdf-cli.jar";
 
-// Fixed JAR path resolution for Electron
 function getJarPath(): string {
   const pluginDir = '/Users/waltry/Library/Mobile Documents/iCloud~md~obsidian/Documents/.obsidian/plugins/obsidian-PDF-to-md';
   const jarPath = path.join(pluginDir, 'node_modules', '@opendataloader', 'pdf', 'lib', JAR_NAME);
@@ -69,7 +149,6 @@ function getJarPath(): string {
   return jarPath;
 }
 
-// Execute JAR file with proper error handling
 function executeJar(args: string[], executionOptions = {}) {
   const { streamOutput = false } = executionOptions;
   return new Promise((resolve, reject) => {
@@ -113,7 +192,6 @@ function executeJar(args: string[], executionOptions = {}) {
   });
 }
 
-// Build CLI arguments from options
 function buildArgs(options: any): string[] {
   const args = [];
   if (options.outputDir) args.push("--output-dir", options.outputDir);
@@ -157,7 +235,6 @@ function buildArgs(options: any): string[] {
   return args;
 }
 
-// Main convert function with same API as @opendataloader/pdf
 async function convert(inputPaths: string | string[], options: any = {}) {
   const inputList = Array.isArray(inputPaths) ? inputPaths : [inputPaths];
   if (inputList.length === 0) {
@@ -172,13 +249,15 @@ async function convert(inputPaths: string | string[], options: any = {}) {
   return executeJar(args, { streamOutput: !options.quiet });
 }
 
-// ─── Modal ────────────────────────────────────────────────────────────────────
+// ─── Enhanced Modal with Mode Selection ──────────────────────────────────────
 
 class ConvertModal extends Modal {
   private file: TFile;
   private nameInput: HTMLInputElement;
   private statusEl: HTMLElement;
   private convertBtn: HTMLButtonElement;
+  private modeSelect: HTMLSelectElement;
+  private folderInput: HTMLInputElement;
 
   constructor(app: App, file: TFile) {
     super(app);
@@ -220,6 +299,40 @@ class ConvertModal extends Modal {
 
     this.nameInput.addEventListener("focus", () => this.nameInput.select());
 
+    // Output folder input
+    const folderField = contentEl.createDiv("pcm-field");
+    folderField.createEl("label", { cls: "pcm-label", text: "Output folder (optional)", attr: { for: "pcm-folder" } });
+
+    const folderInputRow = folderField.createDiv("pcm-input-row");
+    this.folderInput = folderInputRow.createEl("input", {
+      cls: "pcm-input",
+      attr: { id: "pcm-folder", type: "text", placeholder: "e.g., converted-pdfs" },
+    });
+
+    // Conversion mode selection
+    const modeField = contentEl.createDiv("pcm-field");
+    modeField.createEl("label", { cls: "pcm-label", text: "Conversion Mode", attr: { for: "pcm-mode" } });
+
+    this.modeSelect = modeField.createEl("select", { cls: "pcm-select", attr: { id: "pcm-mode" } });
+
+    CONVERSION_MODES.forEach(mode => {
+      const option = this.modeSelect.createEl("option", {
+        value: mode.id,
+        text: mode.name
+      });
+      if (mode.id === "hybrid") {
+        option.selected = true; // Default to Hybrid mode
+      }
+    });
+
+    // Mode description
+    const modeDesc = modeField.createEl("div", { cls: "pcm-mode-desc" });
+    this.updateModeDescription();
+
+    this.modeSelect.addEventListener("change", () => {
+      this.updateModeDescription();
+    });
+
     // Status bar
     this.statusEl = contentEl.createDiv("pcm-status pcm-status-idle");
     this.statusEl.textContent = "Ready";
@@ -233,10 +346,31 @@ class ConvertModal extends Modal {
       if (e.key === "Enter") this.runConvert();
     });
 
+    this.folderInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") this.runConvert();
+    });
+
     const cancelBtn = actions.createEl("button", { cls: "pcm-btn pcm-btn-secondary", text: "Cancel" });
     cancelBtn.onclick = () => this.close();
 
     setTimeout(() => this.nameInput.focus(), 50);
+  }
+
+  private updateModeDescription() {
+    const selectedMode = CONVERSION_MODES.find(mode => mode.id === this.modeSelect.value);
+    if (selectedMode) {
+      // Remove existing description
+      const existingDesc = this.modeSelect.nextElementSibling;
+      if (existingDesc && existingDesc.classList.contains("pcm-mode-desc")) {
+        existingDesc.remove();
+      }
+
+      // Add new description
+      const descEl = this.modeSelect.parentElement.createEl("div", {
+        cls: "pcm-mode-desc",
+        text: selectedMode.description
+      });
+    }
   }
 
   private async runConvert() {
@@ -252,8 +386,18 @@ class ConvertModal extends Modal {
       return;
     }
 
+    const outputFolder = this.folderInput?.value?.trim();
+    if (outputFolder && /[/\\:*?"<>|]/.test(outputFolder)) {
+      this.setStatus("error", 'Folder name contains invalid characters: / \\ : * ? " < > |');
+      if (this.folderInput) this.folderInput.focus();
+      return;
+    }
+
     if (this.convertBtn) this.convertBtn.disabled = true;
     if (this.nameInput) this.nameInput.disabled = true;
+    if (this.folderInput) this.folderInput.disabled = true;
+    if (this.modeSelect) this.modeSelect.disabled = true;
+
     this.setStatus("converting", "Checking system requirements...");
 
     try {
@@ -295,6 +439,16 @@ class ConvertModal extends Modal {
         throw new Error(`Invalid vault path: ${vaultPath}`);
       }
 
+      // Determine output directory
+      let outputDir = vaultPath;
+      if (outputFolder) {
+        outputDir = path.join(vaultPath, outputFolder);
+        // Create output folder if it doesn't exist
+        if (!fs.existsSync(outputDir)) {
+          fs.mkdirSync(outputDir, { recursive: true });
+        }
+      }
+
       if (!this.file.path || typeof this.file.path !== 'string') {
         throw new Error(`Invalid file path: ${this.file.path}`);
       }
@@ -305,16 +459,22 @@ class ConvertModal extends Modal {
         throw new Error(`PDF file not found: ${pdfAbs}`);
       }
 
-      // Use fixed @opendataloader/pdf library
-      this.setStatus("converting", "Converting PDF to Markdown...");
-      const result = await convert([pdfAbs], {
-        outputDir: vaultPath,
-        format: "markdown",
+      // Get selected conversion mode
+      const selectedMode = CONVERSION_MODES.find(mode => mode.id === this.modeSelect.value) || CONVERSION_MODES[1]; // Default to hybrid
+
+      // Use selected conversion mode options
+      this.setStatus("converting", `Converting with ${selectedMode.name}...`);
+
+      const conversionOptions = {
+        ...selectedMode.options,
+        outputDir: outputDir,
         quiet: false
-      });
+      };
+
+      const result = await convert([pdfAbs], conversionOptions);
 
       // Check for generated files
-      const expectedMdPath = path.join(vaultPath, this.file.basename + ".md");
+      const expectedMdPath = path.join(outputDir, this.file.basename + ".md");
       if (!fs.existsSync(expectedMdPath)) {
         throw new Error(
           `Conversion completed but no .md file was created.\n\n` +
@@ -324,7 +484,7 @@ class ConvertModal extends Modal {
       }
 
       // Rename to user's chosen name
-      const targetMd = path.join(vaultPath, rawName + ".md");
+      const targetMd = path.join(outputDir, rawName + ".md");
       if (expectedMdPath !== targetMd) {
         fs.renameSync(expectedMdPath, targetMd);
       }
@@ -336,8 +496,9 @@ class ConvertModal extends Modal {
         // Continue anyway, the file should still be created
       }
 
-      this.setStatus("done", `Saved as ${rawName}.md`);
-      new Notice(`✅ Successfully converted to ${rawName}.md`);
+      const outputLocation = outputFolder ? `${outputFolder}/${rawName}.md` : `${rawName}.md`;
+      this.setStatus("done", `Saved as ${outputLocation}`);
+      new Notice(`✅ Successfully converted to ${outputLocation}`);
       setTimeout(() => this.close(), 1800);
 
     } catch (e: any) {
@@ -355,6 +516,8 @@ class ConvertModal extends Modal {
       new Notice(`❌ Conversion failed: ${errorMessage}`);
       if (this.convertBtn) this.convertBtn.disabled = false;
       if (this.nameInput) this.nameInput.disabled = false;
+      if (this.folderInput) this.folderInput.disabled = false;
+      if (this.modeSelect) this.modeSelect.disabled = false;
       if (this.convertBtn) this.convertBtn.textContent = "Retry";
     }
   }
