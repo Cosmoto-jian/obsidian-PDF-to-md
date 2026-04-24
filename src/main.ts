@@ -59,78 +59,81 @@ interface ConversionMode {
   name: string;
   description: string;
   options: any;
+  requiresHybrid?: boolean;
 }
 
 const CONVERSION_MODES: ConversionMode[] = [
   {
     id: "fast",
     name: "Fast Mode",
-    description: "Quick conversion with basic formatting",
-    options: { format: "markdown" }
+    description: "Quick conversion with basic formatting. Works without additional services.",
+    options: { format: "markdown" },
+    requiresHybrid: false
   },
   {
-    id: "hybrid",
-    name: "Hybrid Mode (Recommended)",
-    description: "AI-powered conversion with better layout detection",
+    id: "standard",
+    name: "Standard Mode",
+    description: "Balanced conversion with better layout detection and table support.",
     options: {
       format: "markdown",
-      hybrid: "docling-fast",
-      hybridMode: "auto",
-      hybridFallback: true
-    }
+      useStructTree: true,
+      tableMethod: "default"
+    },
+    requiresHybrid: false
   },
   {
-    id: "hybrid-ocr",
-    name: "Hybrid + OCR",
-    description: "AI conversion with OCR for scanned documents",
+    id: "enhanced",
+    name: "Enhanced Mode",
+    description: "Improved conversion with image handling and better text extraction.",
     options: {
       format: "markdown",
-      hybrid: "docling-fast",
-      hybridMode: "full",
-      hybridFallback: true,
-      sanitize: true
-    }
-  },
-  {
-    id: "hybrid-formula",
-    name: "Hybrid + Formula",
-    description: "Enhanced math formula detection and conversion",
-    options: {
-      format: "markdown",
-      hybrid: "docling-fast",
-      hybridMode: "auto",
-      hybridFallback: true,
-      useStructTree: true
-    }
-  },
-  {
-    id: "hybrid-picture",
-    name: "Hybrid + Picture",
-    description: "Better image extraction and handling",
-    options: {
-      format: "markdown",
-      hybrid: "docling-fast",
-      hybridMode: "auto",
-      hybridFallback: true,
-      imageOutput: "external",
-      imageFormat: "png"
-    }
-  },
-  {
-    id: "hybrid-all",
-    name: "Hybrid + Complete",
-    description: "Maximum quality with all enhancements",
-    options: {
-      format: "markdown",
-      hybrid: "docling-fast",
-      hybridMode: "full",
-      hybridFallback: true,
       useStructTree: true,
       imageOutput: "external",
       imageFormat: "png",
+      keepLineBreaks: true
+    },
+    requiresHybrid: false
+  },
+  {
+    id: "ocr",
+    name: "OCR Mode",
+    description: "For scanned documents. Enhanced text recognition and sanitization.",
+    options: {
+      format: "markdown",
       sanitize: true,
-      detectStrikethrough: true
-    }
+      useStructTree: true,
+      contentSafetyOff: "all"
+    },
+    requiresHybrid: false
+  },
+  {
+    id: "formula",
+    name: "Formula Mode",
+    description: "Enhanced math formula and equation detection.",
+    options: {
+      format: "markdown",
+      useStructTree: true,
+      keepLineBreaks: true,
+      tableMethod: "cluster"
+    },
+    requiresHybrid: false
+  },
+  {
+    id: "complete",
+    name: "Complete Mode",
+    description: "Maximum quality with all enhancements. Best for complex documents.",
+    options: {
+      format: "markdown",
+      useStructTree: true,
+      imageOutput: "external",
+      imageFormat: "png",
+      keepLineBreaks: true,
+      sanitize: true,
+      detectStrikethrough: true,
+      tableMethod: "cluster",
+      readingOrder: "xycut"
+    },
+    requiresHybrid: false
   }
 ];
 
@@ -226,11 +229,7 @@ function buildArgs(options: any): string[] {
   if (options.pages) args.push("--pages", options.pages);
   if (options.includeHeaderFooter) args.push("--include-header-footer");
   if (options.detectStrikethrough) args.push("--detect-strikethrough");
-  if (options.hybrid) args.push("--hybrid", options.hybrid);
-  if (options.hybridMode) args.push("--hybrid-mode", options.hybridMode);
-  if (options.hybridUrl) args.push("--hybrid-url", options.hybridUrl);
-  if (options.hybridTimeout) args.push("--hybrid-timeout", options.hybridTimeout);
-  if (options.hybridFallback) args.push("--hybrid-fallback");
+  // Note: Removed hybrid options as they require external services
   if (options.toStdout) args.push("--to-stdout");
   return args;
 }
@@ -320,8 +319,8 @@ class ConvertModal extends Modal {
         value: mode.id,
         text: mode.name
       });
-      if (mode.id === "hybrid") {
-        option.selected = true; // Default to Hybrid mode
+      if (mode.id === "standard") {
+        option.selected = true; // Default to Standard mode
       }
     });
 
@@ -460,7 +459,7 @@ class ConvertModal extends Modal {
       }
 
       // Get selected conversion mode
-      const selectedMode = CONVERSION_MODES.find(mode => mode.id === this.modeSelect.value) || CONVERSION_MODES[1]; // Default to hybrid
+      const selectedMode = CONVERSION_MODES.find(mode => mode.id === this.modeSelect.value) || CONVERSION_MODES[1]; // Default to standard
 
       // Use selected conversion mode options
       this.setStatus("converting", `Converting with ${selectedMode.name}...`);
