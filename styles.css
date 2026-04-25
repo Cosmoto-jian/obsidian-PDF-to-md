@@ -1,87 +1,41 @@
-/* ── PDF to MD · Conversion Modal ────────────────────────────────────── */
+/* ── PDF to MD · Conversion Modal ── */
 
 .pcm-root {
   padding: 0;
-  min-width: 420px;
-  max-width: 500px;
+  width: 400px;
 }
 
-/* ── Header ─────────────────────────────────────────────────── */
+/* ── Header ── */
 
-.pcm-hero {
-  display: flex;
-  align-items: center;
-  gap: 13px;
-  padding: 22px 22px 18px;
+.pcm-header {
+  padding: 20px 20px 14px;
   border-bottom: 1px solid var(--background-modifier-border);
 }
 
-.pcm-icon {
-  flex-shrink: 0;
-  width: 44px;
-  height: 44px;
-  border-radius: 11px;
-  background: var(--interactive-accent);
-  color: #fff;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: 0 4px 12px rgba(var(--interactive-accent-rgb), 0.30);
-}
-
-.pcm-meta {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-
-.pcm-source-label {
-  font-size: 10px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.7px;
-  color: var(--text-faint);
-}
-
-.pcm-source-name {
-  font-size: 13.5px;
-  font-weight: 600;
+.pcm-title {
+  font-size: 15px;
+  font-weight: 700;
   color: var(--text-normal);
+  letter-spacing: -0.2px;
+}
+
+.pcm-file {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 2px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-/* ── Form Fields ─────────────────────────────────────────────── */
+/* ── Input rows ── */
 
-.pcm-field {
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-  padding: 18px 22px 0;
-}
-
-.pcm-label {
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.7px;
-  color: var(--text-faint);
-}
-
-.pcm-input-row {
+.pcm-row {
   display: flex;
   align-items: center;
-  gap: 0;
-  border: 1.5px solid var(--background-modifier-border);
-  border-radius: 8px;
-  overflow: hidden;
-  transition: border-color 0.15s;
-}
-
-.pcm-input-row:focus-within {
-  border-color: var(--interactive-accent);
+  margin: 0 20px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--background-modifier-border);
 }
 
 .pcm-input {
@@ -89,112 +43,98 @@
   border: none !important;
   outline: none !important;
   box-shadow: none !important;
-  background: var(--background-primary);
+  background: transparent;
   color: var(--text-normal);
-  font-size: 13.5px;
-  padding: 9px 12px;
   font-family: inherit;
+  font-size: 14px;
+  padding: 0;
+}
+
+.pcm-input::placeholder {
+  color: var(--text-faint);
 }
 
 .pcm-input:disabled {
-  opacity: 0.5;
+  opacity: 0.35;
 }
 
 .pcm-ext {
-  padding: 9px 12px 9px 4px;
   font-size: 13px;
-  color: var(--text-muted);
-  background: var(--background-primary);
+  color: var(--text-faint);
   user-select: none;
+  margin-left: 4px;
 }
 
-/* ── Select Dropdown ────────────────────────────────────────── */
+/* ── Mode toggle pills ── */
 
-.pcm-select {
-  width: 100%;
+.pcm-mode-bar {
+  display: flex;
+  gap: 6px;
+  margin: 16px 20px 10px;
+}
+
+.pcm-mode-btn {
+  flex: 1;
+  padding: 8px 0;
   border: 1.5px solid var(--background-modifier-border);
   border-radius: 8px;
-  background: var(--background-primary);
-  color: var(--text-normal);
-  font-size: 13.5px;
-  padding: 9px 12px;
+  background: transparent;
+  color: var(--text-muted);
   font-family: inherit;
-  transition: border-color 0.15s;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
 }
 
-.pcm-select:focus {
+.pcm-mode-btn.active {
   border-color: var(--interactive-accent);
-  outline: none;
+  background: var(--interactive-accent);
+  color: #fff;
 }
 
-.pcm-select:disabled {
-  opacity: 0.5;
+.pcm-mode-btn:not(.active):hover {
+  border-color: var(--text-muted);
+  color: var(--text-normal);
+}
+
+.pcm-mode-btn[disabled] {
+  opacity: 0.35;
   cursor: not-allowed;
 }
 
-/* ── Mode Description ───────────────────────────────────────── */
+/* ── Mode description ── */
 
 .pcm-mode-desc {
   font-size: 11.5px;
-  color: var(--text-muted);
-  margin-top: 4px;
-  padding: 6px 8px;
-  background: var(--background-secondary);
-  border-radius: 6px;
-  border-left: 3px solid var(--interactive-accent);
-  line-height: 1.45;
+  color: var(--text-faint);
+  margin: 0 20px 16px;
+  line-height: 1.4;
+  min-height: 16px;
 }
 
-.pcm-check-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-}
+/* ── Footer ── */
 
-.pcm-check {
+.pcm-footer {
   display: flex;
   align-items: center;
-  gap: 7px;
-  padding: 8px 10px;
-  border: 1px solid var(--background-modifier-border);
-  border-radius: 7px;
-  background: var(--background-primary);
-  font-size: 12px;
-  color: var(--text-muted);
+  gap: 12px;
+  padding: 14px 20px;
+  border-top: 1px solid var(--background-modifier-border);
 }
-
-.pcm-check input {
-  margin: 0;
-}
-
-/* ── Status ──────────────────────────────────────────────────── */
 
 .pcm-status {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  margin: 14px 22px;
-  padding: 9px 14px;
-  border-radius: 8px;
+  flex: 1;
   font-size: 12.5px;
-  font-weight: 500;
-  min-height: 36px;
-  text-align: center;
-  white-space: pre-wrap;
-  transition: background 0.2s, color 0.2s;
+  line-height: 1.4;
 }
 
-.pcm-status-idle       { background: var(--background-secondary);        color: var(--text-faint);  }
-.pcm-status-converting { background: var(--background-secondary);        color: var(--text-accent); }
-.pcm-status-done       { background: rgba(var(--color-green-rgb), 0.12); color: var(--color-green); }
-.pcm-status-error      { background: rgba(var(--color-red-rgb),   0.10); color: var(--color-red);   }
-
-/* Spinner */
-@keyframes pcm-spin { to { transform: rotate(360deg); } }
+.pcm-status-idle       { color: var(--text-faint); }
+.pcm-status-converting { color: var(--text-accent); }
+.pcm-status-done       { color: var(--color-green); }
+.pcm-status-error      { color: var(--color-red); }
 
 .pcm-spinner {
-  flex-shrink: 0;
   display: inline-block;
   width: 12px;
   height: 12px;
@@ -202,51 +142,34 @@
   border-top-color: transparent;
   border-radius: 50%;
   animation: pcm-spin 0.65s linear infinite;
+  margin-right: 6px;
+  vertical-align: middle;
 }
 
-/* ── Buttons ─────────────────────────────────────────────────── */
+@keyframes pcm-spin { to { transform: rotate(360deg); } }
 
-.pcm-actions {
-  display: flex;
-  gap: 8px;
-  padding: 0 22px 22px;
-}
+/* ── Convert button ── */
 
-.pcm-btn {
-  flex: 1;
-  padding: 10px 0;
-  border-radius: 7px;
+.pcm-convert-btn {
+  flex-shrink: 0;
+  padding: 8px 22px;
   border: none;
-  font-size: 13.5px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: filter 0.15s, transform 0.15s, background 0.15s;
-}
-
-.pcm-btn:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-  transform: none !important;
-  filter: none !important;
-}
-
-.pcm-btn-primary {
+  border-radius: 7px;
   background: var(--interactive-accent);
   color: #fff;
-  box-shadow: 0 2px 8px rgba(var(--interactive-accent-rgb), 0.26);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: filter 0.15s;
 }
 
-.pcm-btn-primary:hover:not(:disabled) {
+.pcm-convert-btn:hover {
   filter: brightness(1.08);
-  transform: translateY(-1px);
 }
 
-.pcm-btn-secondary {
-  background: var(--background-secondary);
-  color: var(--text-normal);
-  border: 1px solid var(--background-modifier-border);
-}
-
-.pcm-btn-secondary:hover:not(:disabled) {
-  background: var(--background-modifier-hover);
+.pcm-convert-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  filter: none;
 }

@@ -14,7 +14,6 @@ export default class PdfToMdPlugin extends Plugin {
     this.pluginDir = getPluginDir(this.app, this.manifest);
     this.addSettingTab(new PdfToMdSettingTab(this.app, this));
 
-    // Right-click any PDF in the file explorer
     this.registerEvent(
       this.app.workspace.on("file-menu", (menu, file) => {
         if (!(file instanceof TFile) || file.extension.toLowerCase() !== "pdf") return;
@@ -22,38 +21,43 @@ export default class PdfToMdPlugin extends Plugin {
           item
             .setTitle("Convert to Markdown")
             .setIcon("file-text")
-            .onClick(() => new ConvertModal(this.app, file, this.pluginDir, this.settings).open())
+            .onClick(() => new ConvertModal(this.app, file, this.pluginDir, this.settings, () => this.saveSettings()).open())
         );
       })
     );
 
-    // Command palette: works when a PDF is the active file
     this.addCommand({
       id: "convert-active-pdf",
       name: "Convert active PDF to Markdown",
       checkCallback: (checking) => {
         const file = this.app.workspace.getActiveFile();
         if (file?.extension.toLowerCase() === "pdf") {
-          if (!checking) new ConvertModal(this.app, file, this.pluginDir, this.settings).open();
+          if (!checking) new ConvertModal(this.app, file, this.pluginDir, this.settings, () => this.saveSettings()).open();
           return true;
         }
         return false;
       },
     });
 
-    // Alternative: Add context menu for file explorer
     this.registerEvent(
       this.app.workspace.on("files-menu", (menu, files) => {
         const pdfFiles = files.filter(f => f instanceof TFile && f.extension.toLowerCase() === "pdf");
-        if (pdfFiles.length === 1) {
-          const pdfFile = pdfFiles[0] as TFile;
+        if (pdfFiles.length === 0) return;
+        if (pdfFiles.length > 1) {
           menu.addItem((item) =>
-            item
-              .setTitle("Convert to Markdown")
+            item.setTitle("Convert to Markdown (select one)")
               .setIcon("file-text")
-              .onClick(() => new ConvertModal(this.app, pdfFile, this.pluginDir, this.settings).open())
+              .setDisabled(true)
           );
+          return;
         }
+        const pdfFile = pdfFiles[0] as TFile;
+        menu.addItem((item) =>
+          item
+            .setTitle("Convert to Markdown")
+            .setIcon("file-text")
+            .onClick(() => new ConvertModal(this.app, pdfFile, this.pluginDir, this.settings, () => this.saveSettings()).open())
+        );
       })
     );
   }
@@ -74,21 +78,17 @@ interface PdfToMdSettings {
   hybridUrl: string;
   hybridTimeout: string;
   hybridFallback: boolean;
-  hybridOcr: boolean;
-  hybridOcrLang: string;
-  hybridFormula: boolean;
-  hybridPicture: boolean;
+  lastOutputFolder: string;
+  imageOutputDir: string;
 }
 
 const DEFAULT_SETTINGS: PdfToMdSettings = {
   defaultMode: "fast",
   hybridUrl: "http://localhost:5002",
   hybridTimeout: "0",
-  hybridFallback: false,
-  hybridOcr: false,
-  hybridOcrLang: "ch_sim,en",
-  hybridFormula: false,
-  hybridPicture: false
+  hybridFallback: true,
+  lastOutputFolder: "",
+  imageOutputDir: "",
 };
 
 interface ConversionMode {
@@ -106,21 +106,27 @@ const CONVERSION_MODES: ConversionMode[] = [
     description: "Java-only conversion for standard digital PDFs. No backend required.",
     options: {
       format: "markdown",
-      hybrid: "off"
+      hybrid: "off",
+      imageOutput: "off",
+      keepLineBreaks: true,
+      tableMethod: "cluster",
+      useStructTree: true
     }
   },
   {
     id: "hybrid",
     name: "Hybrid",
-    description: "Uses the local OpenDataLoader hybrid backend for complex layouts and tables.",
+    description: "Uses the hybrid backend for OCR, formulas, and complex layouts.",
     options: {
       format: "markdown",
       hybrid: "docling-fast",
-      hybridMode: "auto",
+      hybridMode: "full",
       hybridUrl: "http://localhost:5002",
       hybridTimeout: "0",
       hybridFallback: true,
-      tableMethod: "cluster"
+      imageOutput: "external",
+      tableMethod: "cluster",
+      useStructTree: true
     },
     requiresHybrid: true
   }
@@ -136,7 +142,6 @@ function normalizeSettings(settings: PdfToMdSettings): PdfToMdSettings {
   }
   if (!settings.hybridUrl) settings.hybridUrl = DEFAULT_SETTINGS.hybridUrl;
   if (!settings.hybridTimeout) settings.hybridTimeout = DEFAULT_SETTINGS.hybridTimeout;
-  if (!settings.hybridOcrLang) settings.hybridOcrLang = DEFAULT_SETTINGS.hybridOcrLang;
   return settings;
 }
 
@@ -148,60 +153,25 @@ function getHybridPort(settings: PdfToMdSettings): string {
   }
 }
 
-interface HybridEnhancements {
-  ocr: boolean;
-  formula: boolean;
-  picture: boolean;
-}
-
-function getHybridServerCommand(
-  mode: ConversionMode,
-  settings: PdfToMdSettings,
-  enhancements: HybridEnhancements = getDefaultHybridEnhancements(settings)
-): string | null {
+function getHybridServerCommand(mode: ConversionMode, settings: PdfToMdSettings): string | null {
   if (!mode.requiresHybrid) return null;
-
-  const args = [`opendataloader-pdf-hybrid --port ${getHybridPort(settings)}`];
-  if (enhancements.ocr) args.push(`--force-ocr --ocr-lang "${settings.hybridOcrLang}"`);
-  if (enhancements.formula) args.push("--enrich-formula");
-  if (enhancements.picture) args.push("--enrich-picture-description");
-  return args.join(" ");
+  return `opendataloader-pdf-hybrid --port ${getHybridPort(settings)}`;
 }
 
-function describeMode(mode: ConversionMode, settings: PdfToMdSettings): string {
-  const command = getHybridServerCommand(mode, settings);
-  return command ? `${mode.description} Start backend: ${command}` : mode.description;
-}
-
-function getDefaultHybridEnhancements(settings: PdfToMdSettings): HybridEnhancements {
-  return {
-    ocr: settings.hybridOcr,
-    formula: settings.hybridFormula,
-    picture: settings.hybridPicture
-  };
-}
-
-function getConversionOptions(
-  mode: ConversionMode,
-  settings: PdfToMdSettings,
-  outputDir: string,
-  enhancements: HybridEnhancements = getDefaultHybridEnhancements(settings)
-): any {
-  const options = {
+function getConversionOptions(mode: ConversionMode, settings: PdfToMdSettings, outputDir: string): any {
+  const options: any = {
     ...mode.options,
     outputDir,
+    hybridUrl: settings.hybridUrl,
+    hybridTimeout: settings.hybridTimeout,
+    hybridFallback: settings.hybridFallback,
     quiet: false
   };
-
-  if (mode.requiresHybrid) {
-    options.hybridUrl = settings.hybridUrl;
-    options.hybridTimeout = settings.hybridTimeout;
-    options.hybridFallback = settings.hybridFallback;
-    if (enhancements.formula || enhancements.picture) {
-      options.hybridMode = "full";
-    }
+  if (settings.imageOutputDir) {
+    options.imageDir = path.isAbsolute(settings.imageOutputDir)
+      ? settings.imageOutputDir
+      : path.join(outputDir, settings.imageOutputDir);
   }
-
   return options;
 }
 
@@ -210,7 +180,8 @@ async function assertHybridBackendAvailable(settings: PdfToMdSettings) {
   const timeout = window.setTimeout(() => controller.abort(), 2500);
 
   try {
-    await fetch(settings.hybridUrl, {
+    const healthUrl = settings.hybridUrl.replace(/\/+$/, "") + "/health";
+    await fetch(healthUrl, {
       method: "GET",
       signal: controller.signal
     });
@@ -432,50 +403,14 @@ class PdfToMdSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Hybrid OCR by default")
-      .setDesc("Adds --force-ocr to the recommended hybrid backend command.")
-      .addToggle((toggle) =>
-        toggle
-          .setValue(this.plugin.settings.hybridOcr)
-          .onChange(async (value) => {
-            this.plugin.settings.hybridOcr = value;
-            await this.plugin.saveSettings();
-          })
-      );
-
-    new Setting(containerEl)
-      .setName("OCR languages")
-      .setDesc('Used when Hybrid OCR is enabled, for example "ch_sim,en" or "en".')
+      .setName("Image output directory")
+      .setDesc("Where to save extracted images. Leave empty to save alongside the markdown file. Relative paths are relative to the output folder.")
       .addText((text) =>
         text
-          .setPlaceholder(DEFAULT_SETTINGS.hybridOcrLang)
-          .setValue(this.plugin.settings.hybridOcrLang)
+          .setPlaceholder("Same as markdown file")
+          .setValue(this.plugin.settings.imageOutputDir)
           .onChange(async (value) => {
-            this.plugin.settings.hybridOcrLang = value.trim() || DEFAULT_SETTINGS.hybridOcrLang;
-            await this.plugin.saveSettings();
-          })
-      );
-
-    new Setting(containerEl)
-      .setName("Hybrid formula enrichment by default")
-      .setDesc("Adds --enrich-formula to the recommended backend command and uses full hybrid mode.")
-      .addToggle((toggle) =>
-        toggle
-          .setValue(this.plugin.settings.hybridFormula)
-          .onChange(async (value) => {
-            this.plugin.settings.hybridFormula = value;
-            await this.plugin.saveSettings();
-          })
-      );
-
-    new Setting(containerEl)
-      .setName("Hybrid picture description by default")
-      .setDesc("Adds --enrich-picture-description to the recommended backend command and uses full hybrid mode.")
-      .addToggle((toggle) =>
-        toggle
-          .setValue(this.plugin.settings.hybridPicture)
-          .onChange(async (value) => {
-            this.plugin.settings.hybridPicture = value;
+            this.plugin.settings.imageOutputDir = value.trim();
             await this.plugin.saveSettings();
           })
       );
@@ -488,169 +423,98 @@ class ConvertModal extends Modal {
   private file: TFile;
   private pluginDir: string;
   private settings: PdfToMdSettings;
+  private saveSettings: () => Promise<void>;
   private nameInput: HTMLInputElement;
+  private folderInput: HTMLInputElement;
   private statusEl: HTMLElement;
   private convertBtn: HTMLButtonElement;
-  private modeSelect: HTMLSelectElement;
-  private folderInput: HTMLInputElement;
-  private enhancementWrap: HTMLElement;
-  private ocrInput: HTMLInputElement;
-  private formulaInput: HTMLInputElement;
-  private pictureInput: HTMLInputElement;
+  private modeDescEl: HTMLElement;
+  private selectedModeId: string;
 
-  constructor(app: App, file: TFile, pluginDir: string, settings: PdfToMdSettings) {
+  constructor(app: App, file: TFile, pluginDir: string, settings: PdfToMdSettings, saveSettings: () => Promise<void>) {
     super(app);
     this.file = file;
     this.pluginDir = pluginDir;
     this.settings = settings;
+    this.saveSettings = saveSettings;
+    this.selectedModeId = settings.defaultMode;
   }
 
   onOpen() {
     const { contentEl } = this;
     contentEl.addClass("pcm-root");
 
-    // Header: icon + source filename
-    const hero = contentEl.createDiv("pcm-hero");
-    const iconEl = hero.createDiv("pcm-icon");
-    iconEl.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
-        stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"
-        width="22" height="22">
-      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-      <polyline points="14 2 14 8 20 8"/>
-      <line x1="16" y1="13" x2="8" y2="13"/>
-      <line x1="16" y1="17" x2="8" y2="17"/>
-      <polyline points="10 9 9 9 8 9"/>
-    </svg>`;
+    // ── Header ──
+    const header = contentEl.createDiv("pcm-header");
+    header.createEl("div", { cls: "pcm-title", text: "PDF → Markdown" });
+    header.createEl("div", { cls: "pcm-file", text: this.file.name });
 
-    const meta = hero.createDiv("pcm-meta");
-    meta.createEl("div", { cls: "pcm-source-label", text: "Source" });
-    meta.createEl("div", { cls: "pcm-source-name", text: this.file.name });
-
-    // Output filename input
-    const fieldWrap = contentEl.createDiv("pcm-field");
-    fieldWrap.createEl("label", { cls: "pcm-label", text: "Save as", attr: { for: "pcm-name" } });
-
-    const inputRow = fieldWrap.createDiv("pcm-input-row");
-    this.nameInput = inputRow.createEl("input", {
+    // ── Filename ──
+    const nameRow = contentEl.createDiv("pcm-row");
+    this.nameInput = nameRow.createEl("input", {
       cls: "pcm-input",
-      attr: { id: "pcm-name", type: "text", spellcheck: "false" },
+      attr: { type: "text", spellcheck: "false" }
     });
     this.nameInput.value = this.file.basename;
-    inputRow.createEl("span", { cls: "pcm-ext", text: ".md" });
+    nameRow.createEl("span", { cls: "pcm-ext", text: ".md" });
 
-    this.nameInput.addEventListener("focus", () => this.nameInput.select());
-
-    // Output folder input
-    const folderField = contentEl.createDiv("pcm-field");
-    folderField.createEl("label", { cls: "pcm-label", text: "Output folder (optional)", attr: { for: "pcm-folder" } });
-
-    const folderInputRow = folderField.createDiv("pcm-input-row");
-    this.folderInput = folderInputRow.createEl("input", {
+    // ── Folder ──
+    const folderRow = contentEl.createDiv("pcm-row");
+    this.folderInput = folderRow.createEl("input", {
       cls: "pcm-input",
-      attr: { id: "pcm-folder", type: "text", placeholder: "e.g., converted-pdfs" },
+      attr: { type: "text", placeholder: "Output folder (optional)", spellcheck: "false" }
     });
+    if (this.settings.lastOutputFolder) {
+      this.folderInput.value = this.settings.lastOutputFolder;
+    }
 
-    // Conversion mode selection
-    const modeField = contentEl.createDiv("pcm-field");
-    modeField.createEl("label", { cls: "pcm-label", text: "Conversion Mode", attr: { for: "pcm-mode" } });
-
-    this.modeSelect = modeField.createEl("select", { cls: "pcm-select", attr: { id: "pcm-mode" } });
-
+    // ── Mode pills ──
+    const modeBar = contentEl.createDiv("pcm-mode-bar");
     CONVERSION_MODES.forEach(mode => {
-      const option = this.modeSelect.createEl("option", {
-        value: mode.id,
+      const btn = modeBar.createEl("button", {
+        cls: "pcm-mode-btn" + (mode.id === this.selectedModeId ? " active" : ""),
         text: mode.name
       });
-      if (mode.id === this.settings.defaultMode) {
-        option.selected = true;
-      }
+      btn.dataset.modeId = mode.id;
+      btn.onclick = () => this.selectMode(mode.id);
     });
 
-    // Mode description
-    const modeDesc = modeField.createEl("div", { cls: "pcm-mode-desc" });
-    this.updateModeDescription();
+    // ── Mode description ──
+    this.modeDescEl = contentEl.createDiv("pcm-mode-desc");
 
-    this.modeSelect.addEventListener("change", () => {
-      this.updateEnhancementVisibility();
-      this.updateModeDescription();
-    });
-
-    // Hybrid enhancements
-    this.enhancementWrap = contentEl.createDiv("pcm-field pcm-enhancements");
-    this.enhancementWrap.createEl("label", { cls: "pcm-label", text: "Hybrid enhancements" });
-    const enhancementGrid = this.enhancementWrap.createDiv("pcm-check-grid");
-    this.ocrInput = this.createCheckbox(enhancementGrid, "OCR", this.settings.hybridOcr);
-    this.formulaInput = this.createCheckbox(enhancementGrid, "Formulas", this.settings.hybridFormula);
-    this.pictureInput = this.createCheckbox(enhancementGrid, "Pictures", this.settings.hybridPicture);
-    [this.ocrInput, this.formulaInput, this.pictureInput].forEach((input) => {
-      input.addEventListener("change", () => this.updateModeDescription());
-    });
-    this.updateEnhancementVisibility();
-    this.updateModeDescription();
-
-    // Status bar
-    this.statusEl = contentEl.createDiv("pcm-status pcm-status-idle");
+    // ── Footer ──
+    const footer = contentEl.createDiv("pcm-footer");
+    this.statusEl = footer.createDiv("pcm-status pcm-status-idle");
     this.statusEl.textContent = "Ready";
 
-    // Action buttons
-    const actions = contentEl.createDiv("pcm-actions");
-    this.convertBtn = actions.createEl("button", { cls: "pcm-btn pcm-btn-primary", text: "Convert" });
+    this.convertBtn = footer.createEl("button", { cls: "pcm-convert-btn", text: "Convert" });
     this.convertBtn.onclick = () => this.runConvert();
 
+    // ── Events ──
+    this.nameInput.addEventListener("focus", () => this.nameInput.select());
     this.nameInput.addEventListener("keydown", (e) => {
       if (e.key === "Enter") this.runConvert();
     });
-
     this.folderInput.addEventListener("keydown", (e) => {
       if (e.key === "Enter") this.runConvert();
     });
 
-    const cancelBtn = actions.createEl("button", { cls: "pcm-btn pcm-btn-secondary", text: "Cancel" });
-    cancelBtn.onclick = () => this.close();
-
+    this.updateModeDescription();
     setTimeout(() => this.nameInput.focus(), 50);
   }
 
+  private selectMode(id: string) {
+    this.selectedModeId = id;
+    const btns = this.contentEl.querySelectorAll(".pcm-mode-btn");
+    btns.forEach((btn: HTMLElement) => {
+      btn.classList.toggle("active", btn.dataset.modeId === id);
+    });
+    this.updateModeDescription();
+  }
+
   private updateModeDescription() {
-    const selectedMode = CONVERSION_MODES.find(mode => mode.id === this.modeSelect.value);
-    if (selectedMode) {
-      // Remove existing description
-      const existingDesc = this.modeSelect.nextElementSibling;
-      if (existingDesc && existingDesc.classList.contains("pcm-mode-desc")) {
-        existingDesc.remove();
-      }
-
-      // Add new description
-      const descEl = this.modeSelect.parentElement.createEl("div", {
-        cls: "pcm-mode-desc",
-        text: describeMode(selectedMode, this.settings)
-      });
-      if (selectedMode.requiresHybrid) {
-        descEl.textContent = `${selectedMode.description} Start backend: ${getHybridServerCommand(selectedMode, this.settings, this.getHybridEnhancements())}`;
-      }
-    }
-  }
-
-  private createCheckbox(parent: HTMLElement, label: string, checked: boolean): HTMLInputElement {
-    const item = parent.createEl("label", { cls: "pcm-check" });
-    const input = item.createEl("input", { attr: { type: "checkbox" } });
-    input.checked = checked;
-    item.createEl("span", { text: label });
-    return input;
-  }
-
-  private updateEnhancementVisibility() {
-    if (!this.enhancementWrap) return;
-    const mode = getMode(this.modeSelect.value);
-    this.enhancementWrap.toggle(mode.requiresHybrid);
-  }
-
-  private getHybridEnhancements(): HybridEnhancements {
-    return {
-      ocr: !!this.ocrInput?.checked,
-      formula: !!this.formulaInput?.checked,
-      picture: !!this.pictureInput?.checked
-    };
+    const mode = CONVERSION_MODES.find(m => m.id === this.selectedModeId);
+    this.modeDescEl.textContent = mode ? mode.description : "";
   }
 
   private async runConvert() {
@@ -673,16 +537,10 @@ class ConvertModal extends Modal {
       return;
     }
 
-    if (this.convertBtn) this.convertBtn.disabled = true;
-    if (this.nameInput) this.nameInput.disabled = true;
-    if (this.folderInput) this.folderInput.disabled = true;
-    if (this.modeSelect) this.modeSelect.disabled = true;
-
-    this.setStatus("converting", "Checking system requirements...");
+    this.setFormDisabled(true);
+    this.setStatus("converting", "Checking Java installation...");
 
     try {
-      // Check Java installation
-      this.setStatus("converting", "Checking Java installation...");
       try {
         execSync("java -version", { stdio: "pipe" });
       } catch (e) {
@@ -701,16 +559,13 @@ class ConvertModal extends Modal {
       new Notice(`📄 Converting ${this.file.name} to Markdown...`);
 
       const vaultPath = getVaultPath(this.app);
-
       if (!vaultPath || typeof vaultPath !== 'string') {
         throw new Error(`Invalid vault path: ${vaultPath}`);
       }
 
-      // Determine output directory
       let outputDir = vaultPath;
       if (outputFolder) {
         outputDir = path.join(vaultPath, outputFolder);
-        // Create output folder if it doesn't exist
         if (!fs.existsSync(outputDir)) {
           fs.mkdirSync(outputDir, { recursive: true });
         }
@@ -721,26 +576,21 @@ class ConvertModal extends Modal {
       }
 
       const pdfAbs = path.join(vaultPath, this.file.path);
-
       if (!fs.existsSync(pdfAbs)) {
         throw new Error(`PDF file not found: ${pdfAbs}`);
       }
 
-      // Get selected conversion mode
-      const selectedMode = getMode(this.modeSelect.value);
+      const selectedMode = getMode(this.selectedModeId);
 
-      // Use selected conversion mode options
       if (selectedMode.requiresHybrid) {
         this.setStatus("converting", `Checking hybrid backend at ${this.settings.hybridUrl}...`);
         await assertHybridBackendAvailable(this.settings);
       }
       this.setStatus("converting", `Converting with ${selectedMode.name}...`);
 
-      const conversionOptions = getConversionOptions(selectedMode, this.settings, outputDir, this.getHybridEnhancements());
-
+      const conversionOptions = getConversionOptions(selectedMode, this.settings, outputDir);
       await convert(this.pluginDir, [pdfAbs], conversionOptions);
 
-      // Check for generated files
       const expectedMdPath = path.join(outputDir, this.file.basename + ".md");
       if (!fs.existsSync(expectedMdPath)) {
         throw new Error(
@@ -750,18 +600,19 @@ class ConvertModal extends Modal {
         );
       }
 
-      // Rename to user's chosen name
       const targetMd = path.join(outputDir, rawName + ".md");
       if (expectedMdPath !== targetMd) {
         fs.renameSync(expectedMdPath, targetMd);
       }
 
-      // Refresh vault
       try {
         await this.app.vault.adapter.list("/");
       } catch (e) {
-        // Continue anyway, the file should still be created
+        // Continue anyway
       }
+
+      this.settings.lastOutputFolder = outputFolder || "";
+      await this.saveSettings();
 
       const outputLocation = outputFolder ? `${outputFolder}/${rawName}.md` : `${rawName}.md`;
       this.setStatus("done", `Saved as ${outputLocation}`);
@@ -776,8 +627,8 @@ class ConvertModal extends Modal {
       } else if (errorMessage.includes("JAR file not found") || errorMessage.includes("Could not locate")) {
         errorMessage = "PDF conversion library not found. Please reinstall the plugin.";
       } else if (errorMessage.includes("hybrid") || errorMessage.includes("Hybrid backend") || errorMessage.includes("localhost:5002") || errorMessage.includes("Connection")) {
-        const selectedMode = getMode(this.modeSelect.value);
-        const command = getHybridServerCommand(selectedMode, this.settings, this.getHybridEnhancements()) || "opendataloader-pdf-hybrid --port 5002";
+        const selectedMode = getMode(this.selectedModeId);
+        const command = getHybridServerCommand(selectedMode, this.settings) || "opendataloader-pdf-hybrid --port 5002";
         errorMessage =
           `Hybrid backend is required for this mode.\n\n` +
           `Start it in a terminal first:\n${command}\n\n` +
@@ -788,12 +639,20 @@ class ConvertModal extends Modal {
 
       this.setStatus("error", errorMessage);
       new Notice(`❌ Conversion failed: ${errorMessage}`);
-      if (this.convertBtn) this.convertBtn.disabled = false;
-      if (this.nameInput) this.nameInput.disabled = false;
-      if (this.folderInput) this.folderInput.disabled = false;
-      if (this.modeSelect) this.modeSelect.disabled = false;
+      this.setFormDisabled(false);
       if (this.convertBtn) this.convertBtn.textContent = "Retry";
     }
+  }
+
+  private setFormDisabled(disabled: boolean) {
+    if (this.nameInput) this.nameInput.disabled = disabled;
+    if (this.folderInput) this.folderInput.disabled = disabled;
+    if (this.convertBtn) this.convertBtn.disabled = disabled;
+    const btns = this.contentEl.querySelectorAll(".pcm-mode-btn");
+    btns.forEach((btn: HTMLElement) => {
+      if (disabled) btn.setAttribute("disabled", "");
+      else btn.removeAttribute("disabled");
+    });
   }
 
   private setStatus(type: "idle" | "converting" | "done" | "error", text: string) {

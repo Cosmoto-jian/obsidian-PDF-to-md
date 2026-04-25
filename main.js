@@ -56,7 +56,7 @@ var PdfToMdPlugin = class extends import_obsidian.Plugin {
         if (!(file instanceof import_obsidian.TFile) || file.extension.toLowerCase() !== "pdf")
           return;
         menu.addItem(
-          (item) => item.setTitle("Convert to Markdown").setIcon("file-text").onClick(() => new ConvertModal(this.app, file, this.pluginDir, this.settings).open())
+          (item) => item.setTitle("Convert to Markdown").setIcon("file-text").onClick(() => new ConvertModal(this.app, file, this.pluginDir, this.settings, () => this.saveSettings()).open())
         );
       })
     );
@@ -67,7 +67,7 @@ var PdfToMdPlugin = class extends import_obsidian.Plugin {
         const file = this.app.workspace.getActiveFile();
         if ((file == null ? void 0 : file.extension.toLowerCase()) === "pdf") {
           if (!checking)
-            new ConvertModal(this.app, file, this.pluginDir, this.settings).open();
+            new ConvertModal(this.app, file, this.pluginDir, this.settings, () => this.saveSettings()).open();
           return true;
         }
         return false;
@@ -76,12 +76,18 @@ var PdfToMdPlugin = class extends import_obsidian.Plugin {
     this.registerEvent(
       this.app.workspace.on("files-menu", (menu, files) => {
         const pdfFiles = files.filter((f) => f instanceof import_obsidian.TFile && f.extension.toLowerCase() === "pdf");
-        if (pdfFiles.length === 1) {
-          const pdfFile = pdfFiles[0];
+        if (pdfFiles.length === 0)
+          return;
+        if (pdfFiles.length > 1) {
           menu.addItem(
-            (item) => item.setTitle("Convert to Markdown").setIcon("file-text").onClick(() => new ConvertModal(this.app, pdfFile, this.pluginDir, this.settings).open())
+            (item) => item.setTitle("Convert to Markdown (select one)").setIcon("file-text").setDisabled(true)
           );
+          return;
         }
+        const pdfFile = pdfFiles[0];
+        menu.addItem(
+          (item) => item.setTitle("Convert to Markdown").setIcon("file-text").onClick(() => new ConvertModal(this.app, pdfFile, this.pluginDir, this.settings, () => this.saveSettings()).open())
+        );
       })
     );
   }
@@ -96,11 +102,9 @@ var DEFAULT_SETTINGS = {
   defaultMode: "fast",
   hybridUrl: "http://localhost:5002",
   hybridTimeout: "0",
-  hybridFallback: false,
-  hybridOcr: false,
-  hybridOcrLang: "ch_sim,en",
-  hybridFormula: false,
-  hybridPicture: false
+  hybridFallback: true,
+  lastOutputFolder: "",
+  imageOutputDir: ""
 };
 var CONVERSION_MODES = [
   {
@@ -109,21 +113,27 @@ var CONVERSION_MODES = [
     description: "Java-only conversion for standard digital PDFs. No backend required.",
     options: {
       format: "markdown",
-      hybrid: "off"
+      hybrid: "off",
+      imageOutput: "off",
+      keepLineBreaks: true,
+      tableMethod: "cluster",
+      useStructTree: true
     }
   },
   {
     id: "hybrid",
     name: "Hybrid",
-    description: "Uses the local OpenDataLoader hybrid backend for complex layouts and tables.",
+    description: "Uses the hybrid backend for OCR, formulas, and complex layouts.",
     options: {
       format: "markdown",
       hybrid: "docling-fast",
-      hybridMode: "auto",
+      hybridMode: "full",
       hybridUrl: "http://localhost:5002",
       hybridTimeout: "0",
       hybridFallback: true,
-      tableMethod: "cluster"
+      imageOutput: "external",
+      tableMethod: "cluster",
+      useStructTree: true
     },
     requiresHybrid: true
   }
@@ -139,8 +149,6 @@ function normalizeSettings(settings) {
     settings.hybridUrl = DEFAULT_SETTINGS.hybridUrl;
   if (!settings.hybridTimeout)
     settings.hybridTimeout = DEFAULT_SETTINGS.hybridTimeout;
-  if (!settings.hybridOcrLang)
-    settings.hybridOcrLang = DEFAULT_SETTINGS.hybridOcrLang;
   return settings;
 }
 function getHybridPort(settings) {
@@ -150,42 +158,22 @@ function getHybridPort(settings) {
     return "5002";
   }
 }
-function getHybridServerCommand(mode, settings, enhancements = getDefaultHybridEnhancements(settings)) {
+function getHybridServerCommand(mode, settings) {
   if (!mode.requiresHybrid)
     return null;
-  const args = [`opendataloader-pdf-hybrid --port ${getHybridPort(settings)}`];
-  if (enhancements.ocr)
-    args.push(`--force-ocr --ocr-lang "${settings.hybridOcrLang}"`);
-  if (enhancements.formula)
-    args.push("--enrich-formula");
-  if (enhancements.picture)
-    args.push("--enrich-picture-description");
-  return args.join(" ");
+  return `opendataloader-pdf-hybrid --port ${getHybridPort(settings)}`;
 }
-function describeMode(mode, settings) {
-  const command = getHybridServerCommand(mode, settings);
-  return command ? `${mode.description} Start backend: ${command}` : mode.description;
-}
-function getDefaultHybridEnhancements(settings) {
-  return {
-    ocr: settings.hybridOcr,
-    formula: settings.hybridFormula,
-    picture: settings.hybridPicture
-  };
-}
-function getConversionOptions(mode, settings, outputDir, enhancements = getDefaultHybridEnhancements(settings)) {
+function getConversionOptions(mode, settings, outputDir) {
   const options = {
     ...mode.options,
     outputDir,
+    hybridUrl: settings.hybridUrl,
+    hybridTimeout: settings.hybridTimeout,
+    hybridFallback: settings.hybridFallback,
     quiet: false
   };
-  if (mode.requiresHybrid) {
-    options.hybridUrl = settings.hybridUrl;
-    options.hybridTimeout = settings.hybridTimeout;
-    options.hybridFallback = settings.hybridFallback;
-    if (enhancements.formula || enhancements.picture) {
-      options.hybridMode = "full";
-    }
+  if (settings.imageOutputDir) {
+    options.imageDir = path.isAbsolute(settings.imageOutputDir) ? settings.imageOutputDir : path.join(outputDir, settings.imageOutputDir);
   }
   return options;
 }
@@ -193,7 +181,8 @@ async function assertHybridBackendAvailable(settings) {
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), 2500);
   try {
-    await fetch(settings.hybridUrl, {
+    const healthUrl = settings.hybridUrl.replace(/\/+$/, "") + "/health";
+    await fetch(healthUrl, {
       method: "GET",
       signal: controller.signal
     });
@@ -397,119 +386,70 @@ var PdfToMdSettingTab = class extends import_obsidian.PluginSettingTab {
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian.Setting(containerEl).setName("Hybrid OCR by default").setDesc("Adds --force-ocr to the recommended hybrid backend command.").addToggle(
-      (toggle) => toggle.setValue(this.plugin.settings.hybridOcr).onChange(async (value) => {
-        this.plugin.settings.hybridOcr = value;
-        await this.plugin.saveSettings();
-      })
-    );
-    new import_obsidian.Setting(containerEl).setName("OCR languages").setDesc('Used when Hybrid OCR is enabled, for example "ch_sim,en" or "en".').addText(
-      (text) => text.setPlaceholder(DEFAULT_SETTINGS.hybridOcrLang).setValue(this.plugin.settings.hybridOcrLang).onChange(async (value) => {
-        this.plugin.settings.hybridOcrLang = value.trim() || DEFAULT_SETTINGS.hybridOcrLang;
-        await this.plugin.saveSettings();
-      })
-    );
-    new import_obsidian.Setting(containerEl).setName("Hybrid formula enrichment by default").setDesc("Adds --enrich-formula to the recommended backend command and uses full hybrid mode.").addToggle(
-      (toggle) => toggle.setValue(this.plugin.settings.hybridFormula).onChange(async (value) => {
-        this.plugin.settings.hybridFormula = value;
-        await this.plugin.saveSettings();
-      })
-    );
-    new import_obsidian.Setting(containerEl).setName("Hybrid picture description by default").setDesc("Adds --enrich-picture-description to the recommended backend command and uses full hybrid mode.").addToggle(
-      (toggle) => toggle.setValue(this.plugin.settings.hybridPicture).onChange(async (value) => {
-        this.plugin.settings.hybridPicture = value;
+    new import_obsidian.Setting(containerEl).setName("Image output directory").setDesc("Where to save extracted images. Leave empty to save alongside the markdown file. Relative paths are relative to the output folder.").addText(
+      (text) => text.setPlaceholder("Same as markdown file").setValue(this.plugin.settings.imageOutputDir).onChange(async (value) => {
+        this.plugin.settings.imageOutputDir = value.trim();
         await this.plugin.saveSettings();
       })
     );
   }
 };
 var ConvertModal = class extends import_obsidian.Modal {
-  constructor(app, file, pluginDir, settings) {
+  constructor(app, file, pluginDir, settings, saveSettings) {
     super(app);
     __publicField(this, "file");
     __publicField(this, "pluginDir");
     __publicField(this, "settings");
+    __publicField(this, "saveSettings");
     __publicField(this, "nameInput");
+    __publicField(this, "folderInput");
     __publicField(this, "statusEl");
     __publicField(this, "convertBtn");
-    __publicField(this, "modeSelect");
-    __publicField(this, "folderInput");
-    __publicField(this, "enhancementWrap");
-    __publicField(this, "ocrInput");
-    __publicField(this, "formulaInput");
-    __publicField(this, "pictureInput");
+    __publicField(this, "modeDescEl");
+    __publicField(this, "selectedModeId");
     this.file = file;
     this.pluginDir = pluginDir;
     this.settings = settings;
+    this.saveSettings = saveSettings;
+    this.selectedModeId = settings.defaultMode;
   }
   onOpen() {
     const { contentEl } = this;
     contentEl.addClass("pcm-root");
-    const hero = contentEl.createDiv("pcm-hero");
-    const iconEl = hero.createDiv("pcm-icon");
-    iconEl.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
-        stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"
-        width="22" height="22">
-      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-      <polyline points="14 2 14 8 20 8"/>
-      <line x1="16" y1="13" x2="8" y2="13"/>
-      <line x1="16" y1="17" x2="8" y2="17"/>
-      <polyline points="10 9 9 9 8 9"/>
-    </svg>`;
-    const meta = hero.createDiv("pcm-meta");
-    meta.createEl("div", { cls: "pcm-source-label", text: "Source" });
-    meta.createEl("div", { cls: "pcm-source-name", text: this.file.name });
-    const fieldWrap = contentEl.createDiv("pcm-field");
-    fieldWrap.createEl("label", { cls: "pcm-label", text: "Save as", attr: { for: "pcm-name" } });
-    const inputRow = fieldWrap.createDiv("pcm-input-row");
-    this.nameInput = inputRow.createEl("input", {
+    const header = contentEl.createDiv("pcm-header");
+    header.createEl("div", { cls: "pcm-title", text: "PDF \u2192 Markdown" });
+    header.createEl("div", { cls: "pcm-file", text: this.file.name });
+    const nameRow = contentEl.createDiv("pcm-row");
+    this.nameInput = nameRow.createEl("input", {
       cls: "pcm-input",
-      attr: { id: "pcm-name", type: "text", spellcheck: "false" }
+      attr: { type: "text", spellcheck: "false" }
     });
     this.nameInput.value = this.file.basename;
-    inputRow.createEl("span", { cls: "pcm-ext", text: ".md" });
-    this.nameInput.addEventListener("focus", () => this.nameInput.select());
-    const folderField = contentEl.createDiv("pcm-field");
-    folderField.createEl("label", { cls: "pcm-label", text: "Output folder (optional)", attr: { for: "pcm-folder" } });
-    const folderInputRow = folderField.createDiv("pcm-input-row");
-    this.folderInput = folderInputRow.createEl("input", {
+    nameRow.createEl("span", { cls: "pcm-ext", text: ".md" });
+    const folderRow = contentEl.createDiv("pcm-row");
+    this.folderInput = folderRow.createEl("input", {
       cls: "pcm-input",
-      attr: { id: "pcm-folder", type: "text", placeholder: "e.g., converted-pdfs" }
+      attr: { type: "text", placeholder: "Output folder (optional)", spellcheck: "false" }
     });
-    const modeField = contentEl.createDiv("pcm-field");
-    modeField.createEl("label", { cls: "pcm-label", text: "Conversion Mode", attr: { for: "pcm-mode" } });
-    this.modeSelect = modeField.createEl("select", { cls: "pcm-select", attr: { id: "pcm-mode" } });
+    if (this.settings.lastOutputFolder) {
+      this.folderInput.value = this.settings.lastOutputFolder;
+    }
+    const modeBar = contentEl.createDiv("pcm-mode-bar");
     CONVERSION_MODES.forEach((mode) => {
-      const option = this.modeSelect.createEl("option", {
-        value: mode.id,
+      const btn = modeBar.createEl("button", {
+        cls: "pcm-mode-btn" + (mode.id === this.selectedModeId ? " active" : ""),
         text: mode.name
       });
-      if (mode.id === this.settings.defaultMode) {
-        option.selected = true;
-      }
+      btn.dataset.modeId = mode.id;
+      btn.onclick = () => this.selectMode(mode.id);
     });
-    const modeDesc = modeField.createEl("div", { cls: "pcm-mode-desc" });
-    this.updateModeDescription();
-    this.modeSelect.addEventListener("change", () => {
-      this.updateEnhancementVisibility();
-      this.updateModeDescription();
-    });
-    this.enhancementWrap = contentEl.createDiv("pcm-field pcm-enhancements");
-    this.enhancementWrap.createEl("label", { cls: "pcm-label", text: "Hybrid enhancements" });
-    const enhancementGrid = this.enhancementWrap.createDiv("pcm-check-grid");
-    this.ocrInput = this.createCheckbox(enhancementGrid, "OCR", this.settings.hybridOcr);
-    this.formulaInput = this.createCheckbox(enhancementGrid, "Formulas", this.settings.hybridFormula);
-    this.pictureInput = this.createCheckbox(enhancementGrid, "Pictures", this.settings.hybridPicture);
-    [this.ocrInput, this.formulaInput, this.pictureInput].forEach((input) => {
-      input.addEventListener("change", () => this.updateModeDescription());
-    });
-    this.updateEnhancementVisibility();
-    this.updateModeDescription();
-    this.statusEl = contentEl.createDiv("pcm-status pcm-status-idle");
+    this.modeDescEl = contentEl.createDiv("pcm-mode-desc");
+    const footer = contentEl.createDiv("pcm-footer");
+    this.statusEl = footer.createDiv("pcm-status pcm-status-idle");
     this.statusEl.textContent = "Ready";
-    const actions = contentEl.createDiv("pcm-actions");
-    this.convertBtn = actions.createEl("button", { cls: "pcm-btn pcm-btn-primary", text: "Convert" });
+    this.convertBtn = footer.createEl("button", { cls: "pcm-convert-btn", text: "Convert" });
     this.convertBtn.onclick = () => this.runConvert();
+    this.nameInput.addEventListener("focus", () => this.nameInput.select());
     this.nameInput.addEventListener("keydown", (e) => {
       if (e.key === "Enter")
         this.runConvert();
@@ -518,46 +458,20 @@ var ConvertModal = class extends import_obsidian.Modal {
       if (e.key === "Enter")
         this.runConvert();
     });
-    const cancelBtn = actions.createEl("button", { cls: "pcm-btn pcm-btn-secondary", text: "Cancel" });
-    cancelBtn.onclick = () => this.close();
+    this.updateModeDescription();
     setTimeout(() => this.nameInput.focus(), 50);
   }
+  selectMode(id) {
+    this.selectedModeId = id;
+    const btns = this.contentEl.querySelectorAll(".pcm-mode-btn");
+    btns.forEach((btn) => {
+      btn.classList.toggle("active", btn.dataset.modeId === id);
+    });
+    this.updateModeDescription();
+  }
   updateModeDescription() {
-    const selectedMode = CONVERSION_MODES.find((mode) => mode.id === this.modeSelect.value);
-    if (selectedMode) {
-      const existingDesc = this.modeSelect.nextElementSibling;
-      if (existingDesc && existingDesc.classList.contains("pcm-mode-desc")) {
-        existingDesc.remove();
-      }
-      const descEl = this.modeSelect.parentElement.createEl("div", {
-        cls: "pcm-mode-desc",
-        text: describeMode(selectedMode, this.settings)
-      });
-      if (selectedMode.requiresHybrid) {
-        descEl.textContent = `${selectedMode.description} Start backend: ${getHybridServerCommand(selectedMode, this.settings, this.getHybridEnhancements())}`;
-      }
-    }
-  }
-  createCheckbox(parent, label, checked) {
-    const item = parent.createEl("label", { cls: "pcm-check" });
-    const input = item.createEl("input", { attr: { type: "checkbox" } });
-    input.checked = checked;
-    item.createEl("span", { text: label });
-    return input;
-  }
-  updateEnhancementVisibility() {
-    if (!this.enhancementWrap)
-      return;
-    const mode = getMode(this.modeSelect.value);
-    this.enhancementWrap.toggle(mode.requiresHybrid);
-  }
-  getHybridEnhancements() {
-    var _a, _b, _c;
-    return {
-      ocr: !!((_a = this.ocrInput) == null ? void 0 : _a.checked),
-      formula: !!((_b = this.formulaInput) == null ? void 0 : _b.checked),
-      picture: !!((_c = this.pictureInput) == null ? void 0 : _c.checked)
-    };
+    const mode = CONVERSION_MODES.find((m) => m.id === this.selectedModeId);
+    this.modeDescEl.textContent = mode ? mode.description : "";
   }
   async runConvert() {
     var _a, _b, _c, _d, _e;
@@ -581,17 +495,9 @@ var ConvertModal = class extends import_obsidian.Modal {
         this.folderInput.focus();
       return;
     }
-    if (this.convertBtn)
-      this.convertBtn.disabled = true;
-    if (this.nameInput)
-      this.nameInput.disabled = true;
-    if (this.folderInput)
-      this.folderInput.disabled = true;
-    if (this.modeSelect)
-      this.modeSelect.disabled = true;
-    this.setStatus("converting", "Checking system requirements...");
+    this.setFormDisabled(true);
+    this.setStatus("converting", "Checking Java installation...");
     try {
-      this.setStatus("converting", "Checking Java installation...");
       try {
         (0, import_child_process.execSync)("java -version", { stdio: "pipe" });
       } catch (e) {
@@ -621,13 +527,13 @@ var ConvertModal = class extends import_obsidian.Modal {
       if (!fs.existsSync(pdfAbs)) {
         throw new Error(`PDF file not found: ${pdfAbs}`);
       }
-      const selectedMode = getMode(this.modeSelect.value);
+      const selectedMode = getMode(this.selectedModeId);
       if (selectedMode.requiresHybrid) {
         this.setStatus("converting", `Checking hybrid backend at ${this.settings.hybridUrl}...`);
         await assertHybridBackendAvailable(this.settings);
       }
       this.setStatus("converting", `Converting with ${selectedMode.name}...`);
-      const conversionOptions = getConversionOptions(selectedMode, this.settings, outputDir, this.getHybridEnhancements());
+      const conversionOptions = getConversionOptions(selectedMode, this.settings, outputDir);
       await convert(this.pluginDir, [pdfAbs], conversionOptions);
       const expectedMdPath = path.join(outputDir, this.file.basename + ".md");
       if (!fs.existsSync(expectedMdPath)) {
@@ -646,6 +552,8 @@ Please check if the PDF file is valid and try again.`
         await this.app.vault.adapter.list("/");
       } catch (e) {
       }
+      this.settings.lastOutputFolder = outputFolder || "";
+      await this.saveSettings();
       const outputLocation = outputFolder ? `${outputFolder}/${rawName}.md` : `${rawName}.md`;
       this.setStatus("done", `Saved as ${outputLocation}`);
       new import_obsidian.Notice(`\u2705 Successfully converted to ${outputLocation}`);
@@ -657,8 +565,8 @@ Please check if the PDF file is valid and try again.`
       } else if (errorMessage.includes("JAR file not found") || errorMessage.includes("Could not locate")) {
         errorMessage = "PDF conversion library not found. Please reinstall the plugin.";
       } else if (errorMessage.includes("hybrid") || errorMessage.includes("Hybrid backend") || errorMessage.includes("localhost:5002") || errorMessage.includes("Connection")) {
-        const selectedMode = getMode(this.modeSelect.value);
-        const command = getHybridServerCommand(selectedMode, this.settings, this.getHybridEnhancements()) || "opendataloader-pdf-hybrid --port 5002";
+        const selectedMode = getMode(this.selectedModeId);
+        const command = getHybridServerCommand(selectedMode, this.settings) || "opendataloader-pdf-hybrid --port 5002";
         errorMessage = `Hybrid backend is required for this mode.
 
 Start it in a terminal first:
@@ -670,17 +578,25 @@ Then retry the conversion.`;
       }
       this.setStatus("error", errorMessage);
       new import_obsidian.Notice(`\u274C Conversion failed: ${errorMessage}`);
-      if (this.convertBtn)
-        this.convertBtn.disabled = false;
-      if (this.nameInput)
-        this.nameInput.disabled = false;
-      if (this.folderInput)
-        this.folderInput.disabled = false;
-      if (this.modeSelect)
-        this.modeSelect.disabled = false;
+      this.setFormDisabled(false);
       if (this.convertBtn)
         this.convertBtn.textContent = "Retry";
     }
+  }
+  setFormDisabled(disabled) {
+    if (this.nameInput)
+      this.nameInput.disabled = disabled;
+    if (this.folderInput)
+      this.folderInput.disabled = disabled;
+    if (this.convertBtn)
+      this.convertBtn.disabled = disabled;
+    const btns = this.contentEl.querySelectorAll(".pcm-mode-btn");
+    btns.forEach((btn) => {
+      if (disabled)
+        btn.setAttribute("disabled", "");
+      else
+        btn.removeAttribute("disabled");
+    });
   }
   setStatus(type, text) {
     if (this.statusEl) {
