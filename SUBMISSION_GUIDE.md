@@ -35,7 +35,7 @@ cd obsidian-releases
   "id": "pdf-to-md",
   "name": "PDF to MD",
   "author": "WANG Jian",
-  "description": "Convert PDF to Markdown with 6 conversion modes and folder organization. Features Fast, Standard, Enhanced, OCR, Formula, and Complete modes for different document types.",
+  "description": "Convert PDF to Markdown with Fast local conversion and OpenDataLoader Hybrid mode for complex PDFs.",
   "repo": "Cosmoto-jian/obsidian-PDF-to-md",
   "branch": "main",
   "versions": {
@@ -78,14 +78,16 @@ Add PDF to MD plugin
 
 ## Description
 
-A powerful PDF to Markdown conversion plugin with 6 different conversion modes and folder organization features.
+A focused PDF to Markdown conversion plugin with Fast local conversion, OpenDataLoader Hybrid mode, and folder organization features.
 
 ### Key Features
 
-- 6 conversion modes (Fast, Standard, Enhanced, OCR, Formula, Complete)
+- Fast local conversion for standard digital PDFs
+- Hybrid mode for complex layouts and tables
+- Optional Hybrid enhancements for OCR, formulas, and picture descriptions
 - Folder organization for output files
 - High-quality conversion using @opendataloader/pdf
-- Local processing (no external services required)
+- Local processing for Fast mode; optional local Hybrid backend for complex PDFs
 - Clean and intuitive user interface
 
 ### Requirements
@@ -96,7 +98,8 @@ A powerful PDF to Markdown conversion plugin with 6 different conversion modes a
 
 ### Testing
 
-- All conversion modes tested and working
+- Fast and Hybrid conversion flows tested
+- Hybrid enhancement command generation verified
 - Folder output functionality verified
 - Error handling validated
 - UI/UX tested
@@ -162,7 +165,3 @@ A powerful PDF to Markdown conversion plugin with 6 different conversion modes a
 - [插件审核标准](https://docs.obsidian.md/Plugins/Community+plugins/Plugin+guidelines)
 
 ---
-
-**祝你的插件上架成功！** 🚀
-
-你的 PDF to MD 插件功能完整、代码质量优秀，完全符合上架要求。按照这个指南操作，应该能够顺利通过审核。

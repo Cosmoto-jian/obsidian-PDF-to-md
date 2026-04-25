@@ -24,7 +24,7 @@
 |---|---|
 | **Trigger** | Right-click any PDF in the file explorer |
 | **Filename** | Editable output filename before converting |
-| **Output location** | Auto-saved to vault root |
+| **Output location** | Vault root or an optional output folder |
 | **Conversion engine** | `@opendataloader/pdf` |
 | **Platform** | Desktop only |
 
@@ -55,8 +55,8 @@ Copy these three files into your vault's plugin folder:
 <Your Vault>/.obsidian/plugins/pdf-to-md/
 ├── main.js            ← compiled output
 ├── manifest.json      ← plugin metadata
-└── styles/
-    └── styles.css     ← UI styles
+├── styles.css         ← UI styles
+└── node_modules/      ← contains @opendataloader/pdf
 ```
 
 ### Step 4 — Enable the plugin
@@ -101,9 +101,40 @@ File Explorer
 
 ---
 
+## Conversion Modes
+
+The plugin intentionally exposes two top-level modes. This keeps the UI aligned with the actual upstream execution paths: local Java conversion, or hybrid backend conversion. OCR, formula enrichment, and picture descriptions are available as Hybrid enhancements instead of separate modes.
+
+| Mode | Best for | Backend command |
+|---|---|---|
+| Fast | Standard digital PDFs, quick local conversion | None |
+| Hybrid | Complex layouts and tables through the OpenDataLoader hybrid backend | `opendataloader-pdf-hybrid --port 5002` |
+
+Hybrid enhancements change the backend command:
+
+| Enhancement | Backend flag | Client behavior |
+|---|---|---|
+| OCR | `--force-ocr --ocr-lang "ch_sim,en"` | Keeps `--hybrid docling-fast` |
+| Formulas | `--enrich-formula` | Uses `--hybrid-mode full` |
+| Pictures | `--enrich-picture-description` | Uses `--hybrid-mode full` |
+
+Hybrid mode requires the upstream Python hybrid package:
+
+```bash
+pip install -U "opendataloader-pdf[hybrid]"
+```
+
+Start the backend in a terminal first, then run conversion from Obsidian.
+
+Plugin settings let you choose the default conversion mode, hybrid backend URL, hybrid timeout, fallback behavior, and default Hybrid enhancements. Fallback is off by default so backend failures are visible.
+
+When Hybrid is selected, the plugin checks whether the configured backend URL is reachable before launching conversion.
+
+---
+
 ## Interface Guide
 
-The conversion dialog has four sections:
+The conversion dialog has five sections:
 
 ```
 ┌─────────────────────────────────────────┐
@@ -144,7 +175,7 @@ The conversion dialog has four sections:
 ## Notes
 
 **Output location**
-All converted `.md` files are saved to the **vault root directory**, regardless of which subfolder the source PDF was in.
+Converted `.md` files are saved to the **vault root directory** by default. Use the optional output folder field to save into a vault-relative folder.
 
 **Re-converting**
 If you convert with the same output filename again, the existing `.md` file will be overwritten. Back up any manually edited content beforehand.
@@ -157,8 +188,8 @@ This plugin depends on Node.js `fs` / `path` modules and the Electron runtime. *
 | PDF Type | Quality |
 |---|---|
 | Standard digital PDF | ⭐⭐⭐⭐⭐ Excellent |
-| Complex / nested tables | ⭐⭐⭐⭐ Good |
-| Scanned / image-based | ⭐⭐⭐ Fair — OCR mode recommended |
+| Complex / nested tables | ⭐⭐⭐⭐⭐ Best with Hybrid |
+| Scanned / image-based | Depends on the external backend configuration |
 
 ---
 ---
@@ -189,7 +220,7 @@ This plugin depends on Node.js `fs` / `path` modules and the Electron runtime. *
 |---|---|
 | **触发方式** | 在文件树中右键任意 PDF 文件 |
 | **文件名** | 转化前可自定义输出文件名 |
-| **保存位置** | 自动保存到 Vault 根目录 |
+| **保存位置** | Vault 根目录，或自定义输出文件夹 |
 | **转化引擎** | `@opendataloader/pdf` |
 | **运行环境** | 仅支持桌面端 |
 
@@ -220,8 +251,8 @@ npm run build    # 编译，生成 main.js
 <Your Vault>/.obsidian/plugins/pdf-to-md/
 ├── main.js            ← 编译产物
 ├── manifest.json      ← 插件元数据
-└── styles/
-    └── styles.css     ← 界面样式
+├── styles.css         ← 界面样式
+└── node_modules/      ← 包含 @opendataloader/pdf
 ```
 
 ### 第四步：启用插件
@@ -266,9 +297,40 @@ npm run build    # 编译，生成 main.js
 
 ---
 
+## 转换模式
+
+插件只暴露两个顶层模式。这样 UI 和上游实际执行路径保持一致：要么本地 Java 转换，要么走 hybrid 后端转换。OCR、公式增强、图片描述作为 Hybrid 增强项，而不是单独模式。
+
+| 模式 | 适用场景 | 后端启动命令 |
+|---|---|---|
+| Fast | 标准数字 PDF，快速本地转换 | 无需后端 |
+| Hybrid | 复杂排版、复杂表格，走 OpenDataLoader hybrid 后端 | `opendataloader-pdf-hybrid --port 5002` |
+
+Hybrid 增强项会改变后端启动命令：
+
+| 增强项 | 后端参数 | 客户端行为 |
+|---|---|---|
+| OCR | `--force-ocr --ocr-lang "ch_sim,en"` | 保持 `--hybrid docling-fast` |
+| 公式 | `--enrich-formula` | 使用 `--hybrid-mode full` |
+| 图片描述 | `--enrich-picture-description` | 使用 `--hybrid-mode full` |
+
+Hybrid 模式需要安装上游 Python hybrid 包：
+
+```bash
+pip install -U "opendataloader-pdf[hybrid]"
+```
+
+先在终端启动对应后端命令，再回到 Obsidian 中执行转换。
+
+插件设置中可以调整默认转换模式、Hybrid 后端 URL、Hybrid 超时时间、fallback 行为，以及默认 Hybrid 增强项。Fallback 默认关闭，避免后端不可用时静默退回本地转换。
+
+选择 Hybrid 时，插件会先检查配置的后端 URL 是否可访问，再启动转换。
+
+---
+
 ## 界面说明
 
-转化弹窗由四个区域组成：
+转化弹窗由五个区域组成：
 
 ```
 ┌─────────────────────────────────────────┐
@@ -309,7 +371,7 @@ npm run build    # 编译，生成 main.js
 ## 注意事项
 
 **输出位置**
-转化完成的 `.md` 文件统一保存在 **Vault 根目录**，不会跟随原 PDF 所在的子文件夹位置。
+转化完成的 `.md` 文件默认保存在 **Vault 根目录**。如果填写输出文件夹，则会保存到对应的 Vault 相对路径。
 
 **重复转化**
 若对同一文件名再次执行转化，已有的 `.md` 文件将被直接覆盖。请注意提前备份已手动编辑的内容。
@@ -322,9 +384,9 @@ npm run build    # 编译，生成 main.js
 | PDF 类型 | 转化效果 |
 |---|---|
 | 标准数字 PDF | ⭐⭐⭐⭐⭐ 优秀 |
-| 含复杂 / 嵌套表格 | ⭐⭐⭐⭐ 良好 |
-| 扫描件 / 图像型 PDF | ⭐⭐⭐ 一般，建议搭配 OCR 模式使用 |
+| 含复杂 / 嵌套表格 | ⭐⭐⭐⭐⭐ 建议使用 Hybrid |
+| 扫描件 / 图像型 PDF | 取决于外部后端配置 |
 
 ---
 
-*PDF to MD · v1.0.0 · Desktop Only · Powered by @opendataloader/pdf*
+*PDF to MD · v2.0.0 · Desktop Only · Powered by @opendataloader/pdf*
