@@ -2,13 +2,13 @@
 
 .pcm-root {
   padding: 0;
-  width: 400px;
+  width: 480px;
 }
 
 /* ── Header ── */
 
 .pcm-header {
-  padding: 20px 20px 14px;
+  padding: 22px 24px 14px;
   border-bottom: 1px solid var(--background-modifier-border);
 }
 
@@ -33,8 +33,9 @@
 .pcm-row {
   display: flex;
   align-items: center;
-  margin: 0 20px;
-  padding: 14px 0;
+  gap: 8px;
+  margin: 0 24px;
+  padding: 12px 0;
   border-bottom: 1px solid var(--background-modifier-border);
 }
 
@@ -48,6 +49,17 @@
   font-family: inherit;
   font-size: 14px;
   padding: 0;
+}
+
+.pcm-row-tag {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  flex-shrink: 0;
+  width: 36px;
+  text-align: right;
 }
 
 .pcm-input::placeholder {
@@ -69,13 +81,14 @@
 
 .pcm-mode-bar {
   display: flex;
-  gap: 6px;
-  margin: 16px 20px 10px;
+  justify-content: center;
+  gap: 8px;
+  margin: 20px 24px 10px;
 }
 
 .pcm-mode-btn {
   flex: 1;
-  padding: 8px 0;
+  padding: 9px 0;
   border: 1.5px solid var(--background-modifier-border);
   border-radius: 8px;
   background: transparent;
@@ -84,7 +97,8 @@
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: all 0.16s ease;
+  max-width: 180px;
 }
 
 .pcm-mode-btn.active {
@@ -108,9 +122,10 @@
 .pcm-mode-desc {
   font-size: 11.5px;
   color: var(--text-faint);
-  margin: 0 20px 16px;
+  margin: 0 24px 16px;
   line-height: 1.4;
   min-height: 16px;
+  text-align: center;
 }
 
 /* ── Footer ── */
@@ -119,7 +134,7 @@
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 14px 20px;
+  padding: 14px 24px;
   border-top: 1px solid var(--background-modifier-border);
 }
 
@@ -172,4 +187,45 @@
   opacity: 0.4;
   cursor: not-allowed;
   filter: none;
+}
+
+/* ── Folder row icon ── */
+
+.pcm-folder-icon {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  color: var(--text-muted);
+  margin-right: 8px;
+  display: flex;
+  align-items: center;
+}
+
+/* ── Browse button ── */
+
+.pcm-browse-btn {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  margin-left: 4px;
+  transition: background 0.15s;
+}
+
+.pcm-browse-btn:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.pcm-browse-btn[disabled] {
+  opacity: 0.35;
+  cursor: not-allowed;
 }

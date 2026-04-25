@@ -104,7 +104,7 @@ var DEFAULT_SETTINGS = {
   hybridTimeout: "0",
   hybridFallback: true,
   lastOutputFolder: "",
-  imageOutputDir: ""
+  lastImageFolder: ""
 };
 var CONVERSION_MODES = [
   {
@@ -164,7 +164,7 @@ function getHybridServerCommand(mode, settings) {
   return `opendataloader-pdf-hybrid --port ${getHybridPort(settings)}`;
 }
 function getConversionOptions(mode, settings, outputDir) {
-  const options = {
+  return {
     ...mode.options,
     outputDir,
     hybridUrl: settings.hybridUrl,
@@ -172,10 +172,6 @@ function getConversionOptions(mode, settings, outputDir) {
     hybridFallback: settings.hybridFallback,
     quiet: false
   };
-  if (settings.imageOutputDir) {
-    options.imageDir = path.isAbsolute(settings.imageOutputDir) ? settings.imageOutputDir : path.join(outputDir, settings.imageOutputDir);
-  }
-  return options;
 }
 async function assertHybridBackendAvailable(settings) {
   const controller = new AbortController();
@@ -386,12 +382,6 @@ var PdfToMdSettingTab = class extends import_obsidian.PluginSettingTab {
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian.Setting(containerEl).setName("Image output directory").setDesc("Where to save extracted images. Leave empty to save alongside the markdown file. Relative paths are relative to the output folder.").addText(
-      (text) => text.setPlaceholder("Same as markdown file").setValue(this.plugin.settings.imageOutputDir).onChange(async (value) => {
-        this.plugin.settings.imageOutputDir = value.trim();
-        await this.plugin.saveSettings();
-      })
-    );
   }
 };
 var ConvertModal = class extends import_obsidian.Modal {
@@ -403,6 +393,7 @@ var ConvertModal = class extends import_obsidian.Modal {
     __publicField(this, "saveSettings");
     __publicField(this, "nameInput");
     __publicField(this, "folderInput");
+    __publicField(this, "imageInput");
     __publicField(this, "statusEl");
     __publicField(this, "convertBtn");
     __publicField(this, "modeDescEl");
@@ -426,14 +417,18 @@ var ConvertModal = class extends import_obsidian.Modal {
     });
     this.nameInput.value = this.file.basename;
     nameRow.createEl("span", { cls: "pcm-ext", text: ".md" });
-    const folderRow = contentEl.createDiv("pcm-row");
-    this.folderInput = folderRow.createEl("input", {
-      cls: "pcm-input",
-      attr: { type: "text", placeholder: "Output folder (optional)", spellcheck: "false" }
-    });
-    if (this.settings.lastOutputFolder) {
-      this.folderInput.value = this.settings.lastOutputFolder;
-    }
+    this.folderInput = this.createFolderRow(
+      contentEl,
+      "OUT",
+      "Vault root if empty",
+      this.settings.lastOutputFolder
+    );
+    this.imageInput = this.createFolderRow(
+      contentEl,
+      "IMG",
+      "Vault root if empty",
+      this.settings.lastImageFolder
+    );
     const modeBar = contentEl.createDiv("pcm-mode-bar");
     CONVERSION_MODES.forEach((mode) => {
       const btn = modeBar.createEl("button", {
@@ -458,8 +453,32 @@ var ConvertModal = class extends import_obsidian.Modal {
       if (e.key === "Enter")
         this.runConvert();
     });
+    this.imageInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter")
+        this.runConvert();
+    });
     this.updateModeDescription();
     setTimeout(() => this.nameInput.focus(), 50);
+  }
+  createFolderRow(container, tag, placeholder, initialValue) {
+    const row = container.createDiv("pcm-row");
+    row.createEl("span", { cls: "pcm-row-tag", text: tag });
+    const icon = row.createEl("span", { cls: "pcm-folder-icon" });
+    icon.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`;
+    const input = row.createEl("input", {
+      cls: "pcm-input",
+      attr: { type: "text", placeholder, spellcheck: "false" }
+    });
+    if (initialValue)
+      input.value = initialValue;
+    const browse = row.createEl("button", { cls: "pcm-browse-btn" });
+    browse.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>`;
+    browse.onclick = () => {
+      new FolderSuggestModal(this.app, (folderPath) => {
+        input.value = folderPath;
+      }).open();
+    };
+    return input;
   }
   selectMode(id) {
     this.selectedModeId = id;
@@ -474,7 +493,7 @@ var ConvertModal = class extends import_obsidian.Modal {
     this.modeDescEl.textContent = mode ? mode.description : "";
   }
   async runConvert() {
-    var _a, _b, _c, _d, _e;
+    var _a, _b, _c, _d, _e, _f, _g;
     const rawName = (_b = (_a = this.nameInput) == null ? void 0 : _a.value) == null ? void 0 : _b.trim();
     if (!rawName) {
       this.setStatus("error", "Please enter a filename");
@@ -493,6 +512,13 @@ var ConvertModal = class extends import_obsidian.Modal {
       this.setStatus("error", 'Folder name contains invalid characters: / \\ : * ? " < > |');
       if (this.folderInput)
         this.folderInput.focus();
+      return;
+    }
+    const imageFolder = (_f = (_e = this.imageInput) == null ? void 0 : _e.value) == null ? void 0 : _f.trim();
+    if (imageFolder && /[/\\:*?"<>|]/.test(imageFolder)) {
+      this.setStatus("error", 'Image folder name contains invalid characters: / \\ : * ? " < > |');
+      if (this.imageInput)
+        this.imageInput.focus();
       return;
     }
     this.setFormDisabled(true);
@@ -534,6 +560,9 @@ var ConvertModal = class extends import_obsidian.Modal {
       }
       this.setStatus("converting", `Converting with ${selectedMode.name}...`);
       const conversionOptions = getConversionOptions(selectedMode, this.settings, outputDir);
+      if (imageFolder) {
+        conversionOptions.imageDir = path.isAbsolute(imageFolder) ? imageFolder : path.join(outputDir, imageFolder);
+      }
       await convert(this.pluginDir, [pdfAbs], conversionOptions);
       const expectedMdPath = path.join(outputDir, this.file.basename + ".md");
       if (!fs.existsSync(expectedMdPath)) {
@@ -553,13 +582,14 @@ Please check if the PDF file is valid and try again.`
       } catch (e) {
       }
       this.settings.lastOutputFolder = outputFolder || "";
+      this.settings.lastImageFolder = imageFolder || "";
       await this.saveSettings();
       const outputLocation = outputFolder ? `${outputFolder}/${rawName}.md` : `${rawName}.md`;
       this.setStatus("done", `Saved as ${outputLocation}`);
       new import_obsidian.Notice(`\u2705 Successfully converted to ${outputLocation}`);
       setTimeout(() => this.close(), 1800);
     } catch (e) {
-      let errorMessage = (_e = e.message) != null ? _e : "Conversion failed";
+      let errorMessage = (_g = e.message) != null ? _g : "Conversion failed";
       if (errorMessage.includes("java")) {
         errorMessage = "Java is required but not installed. Please install Java Runtime Environment.";
       } else if (errorMessage.includes("JAR file not found") || errorMessage.includes("Could not locate")) {
@@ -588,10 +618,11 @@ Then retry the conversion.`;
       this.nameInput.disabled = disabled;
     if (this.folderInput)
       this.folderInput.disabled = disabled;
+    if (this.imageInput)
+      this.imageInput.disabled = disabled;
     if (this.convertBtn)
       this.convertBtn.disabled = disabled;
-    const btns = this.contentEl.querySelectorAll(".pcm-mode-btn");
-    btns.forEach((btn) => {
+    this.contentEl.querySelectorAll(".pcm-mode-btn, .pcm-browse-btn").forEach((btn) => {
       if (disabled)
         btn.setAttribute("disabled", "");
       else
@@ -612,5 +643,23 @@ Then retry the conversion.`;
     if (this.contentEl) {
       this.contentEl.empty();
     }
+  }
+};
+var FolderSuggestModal = class extends import_obsidian.SuggestModal {
+  constructor(app, onChoose) {
+    super(app);
+    __publicField(this, "onChoose");
+    this.onChoose = onChoose;
+    this.setPlaceholder("Search or type a folder path...");
+  }
+  getSuggestions(query) {
+    const folders = this.app.vault.getAllLoadedFiles().filter((f) => f instanceof import_obsidian.TFolder).map((f) => f.path);
+    return query ? folders.filter((f) => f.toLowerCase().includes(query.toLowerCase())) : folders;
+  }
+  renderSuggestion(folder, el) {
+    el.createEl("div", { text: folder || "/" });
+  }
+  onChooseSuggestion(folder) {
+    this.onChoose(folder);
   }
 };

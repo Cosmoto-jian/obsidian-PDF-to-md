@@ -1,4 +1,4 @@
-import { App, Plugin, Modal, TFile, Notice, PluginSettingTab, Setting } from "obsidian";
+import { App, Plugin, Modal, TFile, Notice, PluginSettingTab, Setting, SuggestModal, TFolder } from "obsidian";
 import * as path from "path";
 import * as fs from "fs";
 import { execSync, spawn } from "child_process";
@@ -79,7 +79,7 @@ interface PdfToMdSettings {
   hybridTimeout: string;
   hybridFallback: boolean;
   lastOutputFolder: string;
-  imageOutputDir: string;
+  lastImageFolder: string;
 }
 
 const DEFAULT_SETTINGS: PdfToMdSettings = {
@@ -88,7 +88,7 @@ const DEFAULT_SETTINGS: PdfToMdSettings = {
   hybridTimeout: "0",
   hybridFallback: true,
   lastOutputFolder: "",
-  imageOutputDir: "",
+  lastImageFolder: "",
 };
 
 interface ConversionMode {
@@ -159,7 +159,7 @@ function getHybridServerCommand(mode: ConversionMode, settings: PdfToMdSettings)
 }
 
 function getConversionOptions(mode: ConversionMode, settings: PdfToMdSettings, outputDir: string): any {
-  const options: any = {
+  return {
     ...mode.options,
     outputDir,
     hybridUrl: settings.hybridUrl,
@@ -167,12 +167,6 @@ function getConversionOptions(mode: ConversionMode, settings: PdfToMdSettings, o
     hybridFallback: settings.hybridFallback,
     quiet: false
   };
-  if (settings.imageOutputDir) {
-    options.imageDir = path.isAbsolute(settings.imageOutputDir)
-      ? settings.imageOutputDir
-      : path.join(outputDir, settings.imageOutputDir);
-  }
-  return options;
 }
 
 async function assertHybridBackendAvailable(settings: PdfToMdSettings) {
@@ -401,19 +395,6 @@ class PdfToMdSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
-
-    new Setting(containerEl)
-      .setName("Image output directory")
-      .setDesc("Where to save extracted images. Leave empty to save alongside the markdown file. Relative paths are relative to the output folder.")
-      .addText((text) =>
-        text
-          .setPlaceholder("Same as markdown file")
-          .setValue(this.plugin.settings.imageOutputDir)
-          .onChange(async (value) => {
-            this.plugin.settings.imageOutputDir = value.trim();
-            await this.plugin.saveSettings();
-          })
-      );
   }
 }
 
@@ -426,6 +407,7 @@ class ConvertModal extends Modal {
   private saveSettings: () => Promise<void>;
   private nameInput: HTMLInputElement;
   private folderInput: HTMLInputElement;
+  private imageInput: HTMLInputElement;
   private statusEl: HTMLElement;
   private convertBtn: HTMLButtonElement;
   private modeDescEl: HTMLElement;
@@ -458,15 +440,19 @@ class ConvertModal extends Modal {
     this.nameInput.value = this.file.basename;
     nameRow.createEl("span", { cls: "pcm-ext", text: ".md" });
 
-    // ── Folder ──
-    const folderRow = contentEl.createDiv("pcm-row");
-    this.folderInput = folderRow.createEl("input", {
-      cls: "pcm-input",
-      attr: { type: "text", placeholder: "Output folder (optional)", spellcheck: "false" }
-    });
-    if (this.settings.lastOutputFolder) {
-      this.folderInput.value = this.settings.lastOutputFolder;
-    }
+    // ── Output folder ──
+    this.folderInput = this.createFolderRow(contentEl,
+      "OUT",
+      "Vault root if empty",
+      this.settings.lastOutputFolder
+    );
+
+    // ── Image folder ──
+    this.imageInput = this.createFolderRow(contentEl,
+      "IMG",
+      "Vault root if empty",
+      this.settings.lastImageFolder
+    );
 
     // ── Mode pills ──
     const modeBar = contentEl.createDiv("pcm-mode-bar");
@@ -498,9 +484,31 @@ class ConvertModal extends Modal {
     this.folderInput.addEventListener("keydown", (e) => {
       if (e.key === "Enter") this.runConvert();
     });
+    this.imageInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") this.runConvert();
+    });
 
     this.updateModeDescription();
     setTimeout(() => this.nameInput.focus(), 50);
+  }
+
+  private createFolderRow(container: HTMLElement, tag: string, placeholder: string, initialValue: string): HTMLInputElement {
+    const row = container.createDiv("pcm-row");
+    row.createEl("span", { cls: "pcm-row-tag", text: tag });
+    const icon = row.createEl("span", { cls: "pcm-folder-icon" });
+    icon.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`;
+    const input = row.createEl("input", {
+      cls: "pcm-input",
+      attr: { type: "text", placeholder, spellcheck: "false" }
+    });
+    if (initialValue) input.value = initialValue;
+
+    const browse = row.createEl("button", { cls: "pcm-browse-btn" });
+    browse.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>`;
+    browse.onclick = () => {
+      new FolderSuggestModal(this.app, (folderPath) => { input.value = folderPath; }).open();
+    };
+    return input;
   }
 
   private selectMode(id: string) {
@@ -534,6 +542,13 @@ class ConvertModal extends Modal {
     if (outputFolder && /[/\\:*?"<>|]/.test(outputFolder)) {
       this.setStatus("error", 'Folder name contains invalid characters: / \\ : * ? " < > |');
       if (this.folderInput) this.folderInput.focus();
+      return;
+    }
+
+    const imageFolder = this.imageInput?.value?.trim();
+    if (imageFolder && /[/\\:*?"<>|]/.test(imageFolder)) {
+      this.setStatus("error", 'Image folder name contains invalid characters: / \\ : * ? " < > |');
+      if (this.imageInput) this.imageInput.focus();
       return;
     }
 
@@ -589,6 +604,12 @@ class ConvertModal extends Modal {
       this.setStatus("converting", `Converting with ${selectedMode.name}...`);
 
       const conversionOptions = getConversionOptions(selectedMode, this.settings, outputDir);
+      if (imageFolder) {
+        conversionOptions.imageDir = path.isAbsolute(imageFolder)
+          ? imageFolder
+          : path.join(outputDir, imageFolder);
+      }
+
       await convert(this.pluginDir, [pdfAbs], conversionOptions);
 
       const expectedMdPath = path.join(outputDir, this.file.basename + ".md");
@@ -612,6 +633,7 @@ class ConvertModal extends Modal {
       }
 
       this.settings.lastOutputFolder = outputFolder || "";
+      this.settings.lastImageFolder = imageFolder || "";
       await this.saveSettings();
 
       const outputLocation = outputFolder ? `${outputFolder}/${rawName}.md` : `${rawName}.md`;
@@ -647,9 +669,9 @@ class ConvertModal extends Modal {
   private setFormDisabled(disabled: boolean) {
     if (this.nameInput) this.nameInput.disabled = disabled;
     if (this.folderInput) this.folderInput.disabled = disabled;
+    if (this.imageInput) this.imageInput.disabled = disabled;
     if (this.convertBtn) this.convertBtn.disabled = disabled;
-    const btns = this.contentEl.querySelectorAll(".pcm-mode-btn");
-    btns.forEach((btn: HTMLElement) => {
+    this.contentEl.querySelectorAll(".pcm-mode-btn, .pcm-browse-btn").forEach((btn: HTMLElement) => {
       if (disabled) btn.setAttribute("disabled", "");
       else btn.removeAttribute("disabled");
     });
@@ -670,5 +692,34 @@ class ConvertModal extends Modal {
     if (this.contentEl) {
       this.contentEl.empty();
     }
+  }
+}
+
+// ─── Folder Picker ───────────────────────────────────────────────────────────
+
+class FolderSuggestModal extends SuggestModal<string> {
+  private onChoose: (path: string) => void;
+
+  constructor(app: App, onChoose: (path: string) => void) {
+    super(app);
+    this.onChoose = onChoose;
+    this.setPlaceholder("Search or type a folder path...");
+  }
+
+  getSuggestions(query: string): string[] {
+    const folders = this.app.vault.getAllLoadedFiles()
+      .filter((f): f is TFolder => f instanceof TFolder)
+      .map(f => f.path);
+    return query
+      ? folders.filter(f => f.toLowerCase().includes(query.toLowerCase()))
+      : folders;
+  }
+
+  renderSuggestion(folder: string, el: HTMLElement) {
+    el.createEl("div", { text: folder || "/" });
+  }
+
+  onChooseSuggestion(folder: string) {
+    this.onChoose(folder);
   }
 }
