@@ -611,9 +611,14 @@ class ConvertModal extends Modal {
 
       const conversionOptions = getConversionOptions(selectedMode, this.settings, outputDir);
       if (imageFolder) {
-        const imageDir = path.isAbsolute(imageFolder)
+        const baseImageDir = path.isAbsolute(imageFolder)
           ? imageFolder
           : path.join(vaultPath, imageFolder);
+
+        // Create a subfolder named after the PDF file to avoid overwriting images from different documents
+        const pdfNameFolder = this.file.basename;
+        const imageDir = path.join(baseImageDir, pdfNameFolder);
+
         if (!fs.existsSync(imageDir)) {
           fs.mkdirSync(imageDir, { recursive: true });
         }

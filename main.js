@@ -567,7 +567,9 @@ var ConvertModal = class extends import_obsidian.Modal {
       this.setStatus("converting", `Converting with ${selectedMode.name}...`);
       const conversionOptions = getConversionOptions(selectedMode, this.settings, outputDir);
       if (imageFolder) {
-        const imageDir = path.isAbsolute(imageFolder) ? imageFolder : path.join(vaultPath, imageFolder);
+        const baseImageDir = path.isAbsolute(imageFolder) ? imageFolder : path.join(vaultPath, imageFolder);
+        const pdfNameFolder = this.file.basename;
+        const imageDir = path.join(baseImageDir, pdfNameFolder);
         if (!fs.existsSync(imageDir)) {
           fs.mkdirSync(imageDir, { recursive: true });
         }
