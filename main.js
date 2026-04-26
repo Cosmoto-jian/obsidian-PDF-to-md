@@ -508,18 +508,24 @@ var ConvertModal = class extends import_obsidian.Modal {
       return;
     }
     const outputFolder = (_d = (_c = this.folderInput) == null ? void 0 : _c.value) == null ? void 0 : _d.trim();
-    if (outputFolder && /[/\\:*?"<>|]/.test(outputFolder)) {
-      this.setStatus("error", 'Folder name contains invalid characters: / \\ : * ? " < > |');
-      if (this.folderInput)
-        this.folderInput.focus();
-      return;
+    if (outputFolder) {
+      const outputFolderName = outputFolder.split("/").pop() || outputFolder;
+      if (/[/\\:*?"<>|]/.test(outputFolderName)) {
+        this.setStatus("error", 'Folder name contains invalid characters: / \\ : * ? " < > |');
+        if (this.folderInput)
+          this.folderInput.focus();
+        return;
+      }
     }
     const imageFolder = (_f = (_e = this.imageInput) == null ? void 0 : _e.value) == null ? void 0 : _f.trim();
-    if (imageFolder && /[/\\:*?"<>|]/.test(imageFolder)) {
-      this.setStatus("error", 'Image folder name contains invalid characters: / \\ : * ? " < > |');
-      if (this.imageInput)
-        this.imageInput.focus();
-      return;
+    if (imageFolder) {
+      const imageFolderName = imageFolder.split("/").pop() || imageFolder;
+      if (/[/\\:*?"<>|]/.test(imageFolderName)) {
+        this.setStatus("error", 'Image folder name contains invalid characters: / \\ : * ? " < > |');
+        if (this.imageInput)
+          this.imageInput.focus();
+        return;
+      }
     }
     this.setFormDisabled(true);
     this.setStatus("converting", "Checking Java installation...");
@@ -561,7 +567,11 @@ var ConvertModal = class extends import_obsidian.Modal {
       this.setStatus("converting", `Converting with ${selectedMode.name}...`);
       const conversionOptions = getConversionOptions(selectedMode, this.settings, outputDir);
       if (imageFolder) {
-        conversionOptions.imageDir = path.isAbsolute(imageFolder) ? imageFolder : path.join(outputDir, imageFolder);
+        const imageDir = path.isAbsolute(imageFolder) ? imageFolder : path.join(vaultPath, imageFolder);
+        if (!fs.existsSync(imageDir)) {
+          fs.mkdirSync(imageDir, { recursive: true });
+        }
+        conversionOptions.imageDir = imageDir;
       }
       await convert(this.pluginDir, [pdfAbs], conversionOptions);
       const expectedMdPath = path.join(outputDir, this.file.basename + ".md");

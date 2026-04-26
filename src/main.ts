@@ -539,17 +539,23 @@ class ConvertModal extends Modal {
     }
 
     const outputFolder = this.folderInput?.value?.trim();
-    if (outputFolder && /[/\\:*?"<>|]/.test(outputFolder)) {
-      this.setStatus("error", 'Folder name contains invalid characters: / \\ : * ? " < > |');
-      if (this.folderInput) this.folderInput.focus();
-      return;
+    if (outputFolder) {
+      const outputFolderName = outputFolder.split('/').pop() || outputFolder;
+      if (/[/\\:*?"<>|]/.test(outputFolderName)) {
+        this.setStatus("error", 'Folder name contains invalid characters: / \\ : * ? " < > |');
+        if (this.folderInput) this.folderInput.focus();
+        return;
+      }
     }
 
     const imageFolder = this.imageInput?.value?.trim();
-    if (imageFolder && /[/\\:*?"<>|]/.test(imageFolder)) {
-      this.setStatus("error", 'Image folder name contains invalid characters: / \\ : * ? " < > |');
-      if (this.imageInput) this.imageInput.focus();
-      return;
+    if (imageFolder) {
+      const imageFolderName = imageFolder.split('/').pop() || imageFolder;
+      if (/[/\\:*?"<>|]/.test(imageFolderName)) {
+        this.setStatus("error", 'Image folder name contains invalid characters: / \\ : * ? " < > |');
+        if (this.imageInput) this.imageInput.focus();
+        return;
+      }
     }
 
     this.setFormDisabled(true);
@@ -605,9 +611,13 @@ class ConvertModal extends Modal {
 
       const conversionOptions = getConversionOptions(selectedMode, this.settings, outputDir);
       if (imageFolder) {
-        conversionOptions.imageDir = path.isAbsolute(imageFolder)
+        const imageDir = path.isAbsolute(imageFolder)
           ? imageFolder
-          : path.join(outputDir, imageFolder);
+          : path.join(vaultPath, imageFolder);
+        if (!fs.existsSync(imageDir)) {
+          fs.mkdirSync(imageDir, { recursive: true });
+        }
+        conversionOptions.imageDir = imageDir;
       }
 
       await convert(this.pluginDir, [pdfAbs], conversionOptions);
