@@ -149,6 +149,14 @@ function normalizeSettings(settings) {
     settings.hybridUrl = DEFAULT_SETTINGS.hybridUrl;
   if (!settings.hybridTimeout)
     settings.hybridTimeout = DEFAULT_SETTINGS.hybridTimeout;
+
+  // Validate hybrid URL format
+  try {
+    new URL(settings.hybridUrl);
+  } catch (e) {
+    settings.hybridUrl = DEFAULT_SETTINGS.hybridUrl;
+  }
+
   return settings;
 }
 function getHybridPort(settings) {
@@ -178,11 +186,18 @@ async function assertHybridBackendAvailable(settings) {
   const timeout = window.setTimeout(() => controller.abort(), 2500);
   try {
     const healthUrl = settings.hybridUrl.replace(/\/+$/, "") + "/health";
-    await fetch(healthUrl, {
+    const response = await fetch(healthUrl, {
       method: "GET",
       signal: controller.signal
     });
+
+    if (!response.ok) {
+      throw new Error(`Hybrid backend health check failed with status: ${response.status}`);
+    }
   } catch (e) {
+    if (e.name === 'AbortError') {
+      throw new Error(`Hybrid backend health check timed out at ${settings.hybridUrl}`);
+    }
     throw new Error(`Hybrid backend is not reachable at ${settings.hybridUrl}`);
   } finally {
     window.clearTimeout(timeout);
@@ -560,10 +575,13 @@ var ConvertModal = class extends import_obsidian.Modal {
         throw new Error(`PDF file not found: ${pdfAbs}`);
       }
       const selectedMode = getMode(this.selectedModeId);
+
+      // For hybrid mode, always verify backend availability first
       if (selectedMode.requiresHybrid) {
         this.setStatus("converting", `Checking hybrid backend at ${this.settings.hybridUrl}...`);
         await assertHybridBackendAvailable(this.settings);
       }
+
       this.setStatus("converting", `Converting with ${selectedMode.name}...`);
       const conversionOptions = getConversionOptions(selectedMode, this.settings, outputDir);
       if (imageFolder) {
@@ -609,12 +627,13 @@ Please check if the PDF file is valid and try again.`
       } else if (errorMessage.includes("hybrid") || errorMessage.includes("Hybrid backend") || errorMessage.includes("localhost:5002") || errorMessage.includes("Connection")) {
         const selectedMode = getMode(this.selectedModeId);
         const command = getHybridServerCommand(selectedMode, this.settings) || "opendataloader-pdf-hybrid --port 5002";
-        errorMessage = `Hybrid backend is required for this mode.
+        errorMessage = `Hybrid mode requires a running backend service.
 
-Start it in a terminal first:
-${command}
+To use Hybrid mode:
+1. Start the backend service: ${command}
+2. Ensure it's running on ${this.settings.hybridUrl}
 
-Then retry the conversion.`;
+Or select "Fast" mode for local-only conversion without backend dependency.`;
       } else if (errorMessage.includes("path.join") || errorMessage.includes("path.resolve")) {
         errorMessage = "Path error: Invalid file or directory path. Please check your vault configuration.";
       }
