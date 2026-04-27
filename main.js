@@ -576,10 +576,18 @@ var ConvertModal = class extends import_obsidian.Modal {
       }
       const selectedMode = getMode(this.selectedModeId);
 
-      // For hybrid mode, always verify backend availability first
+      // For hybrid mode, try to auto-start backend if not available
       if (selectedMode.requiresHybrid) {
         this.setStatus("converting", `Checking hybrid backend at ${this.settings.hybridUrl}...`);
-        await assertHybridBackendAvailable(this.settings);
+        try {
+          await assertHybridBackendAvailable(this.settings);
+        } catch (backendError) {
+          // Try to auto-start the backend
+          this.setStatus("converting", "Auto-starting hybrid backend...");
+          await this.startHybridBackend();
+          // Try the health check again
+          await assertHybridBackendAvailable(this.settings);
+        }
       }
 
       this.setStatus("converting", `Converting with ${selectedMode.name}...`);
@@ -660,6 +668,47 @@ Or select "Fast" mode for local-only conversion without backend dependency.`;
         btn.removeAttribute("disabled");
     });
   }
+  async startHybridBackend() {
+    try {
+      // Try to start the hybrid backend service
+      const startCommand = "opendataloader-pdf-hybrid";
+      const args = ["--port", "5002"];
+
+      // First, try with conda environment
+      try {
+        await new Promise((resolve, reject) => {
+          const { spawn } = import_child_process;
+          const env = { ...process.env, PATH: `/opt/anaconda3/bin:${process.env.PATH}` };
+          const hybridProcess = spawn(startCommand, args, {
+            env,
+            detached: true,
+            stdio: 'ignore'
+          });
+
+          hybridProcess.unref();
+
+          // Give it a moment to start
+          setTimeout(() => {
+            if (hybridProcess.pid) {
+              resolve();
+            } else {
+              reject(new Error("Failed to start process"));
+            }
+          }, 2000);
+        });
+      } catch (e) {
+        throw new Error(`Failed to auto-start hybrid backend: ${e.message}`);
+      }
+
+      // Wait a bit for the service to fully start
+      await new Promise(resolve => setTimeout(resolve, 3000));
+
+      new import_obsidian.Notice("✅ Hybrid backend started automatically");
+    } catch (e) {
+      throw new Error(`Could not auto-start hybrid backend. Please start it manually:\nopendataloader-pdf-hybrid --port 5002`);
+    }
+  }
+
   setStatus(type, text) {
     if (this.statusEl) {
       this.statusEl.className = `pcm-status pcm-status-${type}`;
