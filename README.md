@@ -25,38 +25,37 @@
 | **Trigger** | Right-click any PDF in the file explorer |
 | **Filename** | Editable output filename before converting |
 | **Output location** | Vault root or an optional output folder |
-| **Conversion engine** | `@opendataloader/pdf` |
+| **Conversion engine** | `/opt/anaconda3/bin/opendataloader-pdf` |
 | **Platform** | Desktop only |
 
 ---
 
 ## Installation
 
-### Step 1 — Install the conversion library
+### Step 1 — Install the conversion CLI
 
-Open a terminal, navigate to the plugin directory, and run:
+Install OpenDataLoader PDF in the conda environment used by the plugin:
 
 ```bash
-npm install @opendataloader/pdf
+pip install -U "opendataloader-pdf[hybrid]"
 ```
 
 ### Step 2 — Build the plugin
 
 ```bash
-npm install      # Install all dependencies
+npm install      # Install build dependencies
 npm run build    # Compile and generate main.js
 ```
 
 ### Step 3 — Place plugin files
 
-Copy these three files into your vault's plugin folder:
+Copy these files into your vault's plugin folder:
 
 ```
 <Your Vault>/.obsidian/plugins/pdf-to-md/
 ├── main.js            ← compiled output
 ├── manifest.json      ← plugin metadata
-├── styles.css         ← UI styles
-└── node_modules/      ← contains @opendataloader/pdf
+└── styles.css         ← UI styles
 ```
 
 ### Step 4 — Enable the plugin
@@ -103,20 +102,20 @@ File Explorer
 
 ## Conversion Modes
 
-The plugin intentionally exposes two top-level modes. This keeps the UI aligned with the actual upstream execution paths: local Java conversion, or hybrid backend conversion. OCR and formula enrichment are handled by Hybrid mode.
+The plugin exposes the same two practical paths as upstream: direct CLI conversion, or CLI conversion with the `docling-fast` hybrid backend.
 
 | Mode | Best for | Backend command |
 |---|---|---|
-| Fast | Standard digital PDFs, quick local conversion | None |
-| Hybrid | Complex layouts and tables through the OpenDataLoader hybrid backend | Auto-starts `/opt/anaconda3/bin/opendataloader-pdf-hybrid` |
+| Fast | Standard digital PDFs, quick local conversion | `/opt/anaconda3/bin/opendataloader-pdf <pdf>` |
+| Hybrid | Complex layouts, scanned regions, and tables | `/opt/anaconda3/bin/opendataloader-pdf --hybrid docling-fast <pdf>` |
 
-Hybrid enhancements change the backend command:
+Hybrid client flags:
 
-| Enhancement | Backend flag | Client behavior |
+| Option | Client flag | Behavior |
 |---|---|---|
-| OCR | `--force-ocr --ocr-lang "ch_sim,en"` | Keeps `--hybrid docling-fast` |
-| Formulas | `--enrich-formula` | Uses `--hybrid-mode full` |
-| Pictures | `--no-enrich-picture-description` | Exports images without VLM-generated descriptions |
+| Hybrid | `--hybrid docling-fast --hybrid-mode auto` | Uses upstream dynamic triage |
+| Pictures on | `--image-output external` | Exports images to the selected image folder |
+| Pictures off | `--image-output off` | Skips image export for speed |
 
 Hybrid mode requires the upstream Python hybrid package:
 
@@ -124,9 +123,9 @@ Hybrid mode requires the upstream Python hybrid package:
 pip install -U "opendataloader-pdf[hybrid]"
 ```
 
-When Hybrid is selected, the plugin starts the conda backend automatically on `http://127.0.0.1:5012` with OCR and formula enrichment enabled. Picture descriptions are disabled so no vision-language model is loaded.
+When Hybrid is selected, the plugin starts the conda backend automatically on `http://127.0.0.1:5012`. Hybrid exports images by default, and the conversion panel lets you turn image export off for faster runs.
 
-Plugin settings let you choose the default conversion mode, hybrid backend URL, hybrid timeout, and fallback behavior. Fallback is off by default so backend failures are visible.
+Plugin settings let you choose the default conversion mode, hybrid backend URL, and hybrid timeout.
 
 Before conversion, the plugin waits until the configured backend URL is reachable.
 
@@ -221,25 +220,25 @@ This plugin depends on Node.js `fs` / `path` modules and the Electron runtime. *
 | **触发方式** | 在文件树中右键任意 PDF 文件 |
 | **文件名** | 转化前可自定义输出文件名 |
 | **保存位置** | Vault 根目录，或自定义输出文件夹 |
-| **转化引擎** | `@opendataloader/pdf` |
+| **转化引擎** | `/opt/anaconda3/bin/opendataloader-pdf` |
 | **运行环境** | 仅支持桌面端 |
 
 ---
 
 ## 安装
 
-### 第一步：安装转化依赖
+### 第一步：安装转化 CLI
 
-在终端中进入插件目录，执行：
+在插件使用的 conda 环境中安装 OpenDataLoader PDF：
 
 ```bash
-npm install @opendataloader/pdf
+pip install -U "opendataloader-pdf[hybrid]"
 ```
 
 ### 第二步：编译插件
 
 ```bash
-npm install      # 安装所有依赖
+npm install      # 安装构建依赖
 npm run build    # 编译，生成 main.js
 ```
 
@@ -251,8 +250,7 @@ npm run build    # 编译，生成 main.js
 <Your Vault>/.obsidian/plugins/pdf-to-md/
 ├── main.js            ← 编译产物
 ├── manifest.json      ← 插件元数据
-├── styles.css         ← 界面样式
-└── node_modules/      ← 包含 @opendataloader/pdf
+└── styles.css         ← 界面样式
 ```
 
 ### 第四步：启用插件
@@ -299,20 +297,20 @@ npm run build    # 编译，生成 main.js
 
 ## 转换模式
 
-插件只暴露两个顶层模式。这样 UI 和上游实际执行路径保持一致：要么本地 Java 转换，要么走 hybrid 后端转换。OCR 和公式增强由 Hybrid 模式统一处理。
+插件只保留和上游一致的两条实用路径：直接 CLI 转换，或 CLI 加 `docling-fast` hybrid 后端。
 
 | 模式 | 适用场景 | 后端启动命令 |
 |---|---|---|
-| Fast | 标准数字 PDF，快速本地转换 | 无需后端 |
-| Hybrid | 复杂排版、复杂表格，走 OpenDataLoader hybrid 后端 | 自动启动 `/opt/anaconda3/bin/opendataloader-pdf-hybrid` |
+| Fast | 标准数字 PDF，快速本地转换 | `/opt/anaconda3/bin/opendataloader-pdf <pdf>` |
+| Hybrid | 复杂排版、扫描区域和表格 | `/opt/anaconda3/bin/opendataloader-pdf --hybrid docling-fast <pdf>` |
 
-Hybrid 增强项会改变后端启动命令：
+Hybrid 客户端参数：
 
-| 增强项 | 后端参数 | 客户端行为 |
+| 选项 | 客户端参数 | 行为 |
 |---|---|---|
-| OCR | `--force-ocr --ocr-lang "ch_sim,en"` | 保持 `--hybrid docling-fast` |
-| 公式 | `--enrich-formula` | 使用 `--hybrid-mode full` |
-| 图片 | `--no-enrich-picture-description` | 导出图片，但不调用视觉语言模型生成描述 |
+| Hybrid | `--hybrid docling-fast --hybrid-mode auto` | 使用上游动态分流 |
+| 导出图片 | `--image-output external` | 保存图片到所选图片目录 |
+| 不导出图片 | `--image-output off` | 跳过图片导出以提升速度 |
 
 Hybrid 模式需要安装上游 Python hybrid 包：
 
@@ -320,9 +318,9 @@ Hybrid 模式需要安装上游 Python hybrid 包：
 pip install -U "opendataloader-pdf[hybrid]"
 ```
 
-选择 Hybrid 时，插件会自动在 `http://127.0.0.1:5012` 启动 conda 后端，并启用 OCR 和公式增强。图片描述已关闭，因此不会加载视觉语言模型。
+选择 Hybrid 时，插件会自动在 `http://127.0.0.1:5012` 启动 conda 后端。Hybrid 默认导出图片，也可以在转换面板中关闭以提升速度。
 
-插件设置中可以调整默认转换模式、Hybrid 后端 URL、Hybrid 超时时间和 fallback 行为。Fallback 默认关闭，避免后端不可用时静默退回本地转换。
+插件设置中可以调整默认转换模式、Hybrid 后端 URL 和 Hybrid 超时时间。
 
 正式转换前，插件会等待配置的后端 URL 可访问。
 
@@ -389,4 +387,4 @@ pip install -U "opendataloader-pdf[hybrid]"
 
 ---
 
-*PDF to MD · v2.0.0 · Desktop Only · Powered by @opendataloader/pdf*
+*PDF to MD · v2.0.0 · Desktop Only · Powered by opendataloader-pdf CLI*

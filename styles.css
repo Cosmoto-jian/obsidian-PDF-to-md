@@ -30,7 +30,8 @@
 
 /* ── Input rows ── */
 
-.pcm-row {
+.pcm-row,
+.pcm-toggle-row {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -70,11 +71,77 @@
   opacity: 0.35;
 }
 
+.pcm-row.is-disabled .pcm-folder-icon,
+.pcm-row.is-disabled .pcm-browse-btn {
+  opacity: 0.35;
+}
+
+.pcm-toggle-row.is-disabled {
+  opacity: 0.45;
+}
+
 .pcm-ext {
   font-size: 13px;
   color: var(--text-faint);
   user-select: none;
   margin-left: 4px;
+}
+
+/* ── Image export toggle ── */
+
+.pcm-toggle-label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-muted);
+  font-size: 13px;
+  cursor: pointer;
+  user-select: none;
+  min-height: 20px;
+}
+
+.pcm-toggle-label input {
+  display: none;
+}
+
+.pcm-toggle-box {
+  position: relative;
+  width: 28px;
+  height: 16px;
+  border: 1.5px solid var(--background-modifier-border);
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.pcm-toggle-box::before {
+  content: "";
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--text-faint);
+  transform: translateX(2px);
+  transition: transform 0.15s ease, background 0.15s ease;
+}
+
+.pcm-toggle-label input:checked + .pcm-toggle-box {
+  background: var(--interactive-accent);
+  border-color: var(--interactive-accent);
+}
+
+.pcm-toggle-label input:checked + .pcm-toggle-box::before {
+  background: #fff;
+  transform: translateX(14px);
+}
+
+.pcm-toggle-label input:disabled + .pcm-toggle-box {
+  cursor: not-allowed;
+}
+
+.pcm-toggle-text {
+  line-height: 1;
 }
 
 /* ── Mode toggle pills ── */

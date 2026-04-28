@@ -7,32 +7,17 @@ import * as https from "https";
 
 // ─── Custom Errors ────────────────────────────────────────────────────────────
 
-class JavaNotFoundError extends Error {
-  constructor() {
-    super(
-      "Java Runtime Environment (JRE) is required but not found.\n\n" +
-      "Please install Java from:\n" +
-      "• macOS: brew install openjdk\n" +
-      "• Or download from: https://www.java.com/download/"
-    );
-    this.name = "JavaNotFoundError";
-  }
-}
-
-class JarNotFoundError extends Error {
-  constructor(candidates: string[]) {
-    super(
-      `JAR file not found. Please run "npm install @opendataloader/pdf" in the plugin folder.\n\n` +
-      `Checked:\n${candidates.join("\n")}`
-    );
-    this.name = "JarNotFoundError";
-  }
-}
-
 class HybridBackendError extends Error {
   constructor(url: string, detail?: string) {
     super(`Hybrid backend is not reachable at ${url}${detail ? `: ${detail}` : ""}`);
     this.name = "HybridBackendError";
+  }
+}
+
+class CliNotFoundError extends Error {
+  constructor() {
+    super(`OpenDataLoader CLI not found: ${OPENDATALOADER_CLI}`);
+    this.name = "CliNotFoundError";
   }
 }
 
@@ -104,10 +89,6 @@ export default class PdfToMdPlugin extends Plugin {
     await this.saveData(this.settings);
   }
 
-  getPluginDir(): string {
-    return this.pluginDir;
-  }
-
   openConvertModal(file: TFile) {
     new ConvertModal(this.app, this, file).open();
   }
@@ -161,23 +142,23 @@ interface PdfToMdSettings {
   defaultMode: string;
   hybridUrl: string;
   hybridTimeout: string;
-  hybridFallback: boolean;
   lastOutputFolder: string;
   lastImageFolder: string;
+  exportImages: boolean;
 }
 
 const DEFAULT_SETTINGS: PdfToMdSettings = {
   defaultMode: "fast",
   hybridUrl: "http://127.0.0.1:5012",
   hybridTimeout: "0",
-  hybridFallback: false,
   lastOutputFolder: "",
   lastImageFolder: "",
+  exportImages: true,
 };
 
+const OPENDATALOADER_CLI = "/opt/anaconda3/bin/opendataloader-pdf";
 const HYBRID_BACKEND_BIN = "/opt/anaconda3/bin/opendataloader-pdf-hybrid";
 const HYBRID_PYTHON_BIN = "/opt/anaconda3/bin/python3.12";
-const HYBRID_OCR_LANG = "ch_sim,en";
 const HYBRID_STARTUP_TIMEOUT_MS = 180000;
 const HEALTH_CHECK_TIMEOUT_MS = 2500;
 const HYBRID_LOG_NAME = "hybrid-backend.log";
@@ -186,7 +167,6 @@ interface ConversionMode {
   id: string;
   name: string;
   description: string;
-  options: any;
   requiresHybrid?: boolean;
 }
 
@@ -195,27 +175,11 @@ const CONVERSION_MODES: ConversionMode[] = [
     id: "fast",
     name: "Fast",
     description: "Java-only conversion for standard digital PDFs. No backend required.",
-    options: {
-      format: "markdown",
-      hybrid: "off",
-      imageOutput: "off",
-      keepLineBreaks: true,
-      tableMethod: "cluster",
-      useStructTree: true
-    }
   },
   {
     id: "hybrid",
     name: "Hybrid",
-    description: "Uses the hybrid backend for OCR, formulas, and complex layouts.",
-    options: {
-      format: "markdown",
-      hybrid: "docling-fast",
-      hybridMode: "full",
-      imageOutput: "external",
-      tableMethod: "cluster",
-      useStructTree: true
-    },
+    description: "Uses the hybrid backend for OCR and complex layouts.",
     requiresHybrid: true
   }
 ];
@@ -270,10 +234,6 @@ function getHybridServerArgs(settings: PdfToMdSettings): string[] {
   return [
     "--host", getHybridHost(settings),
     "--port", getHybridPort(settings),
-    "--force-ocr",
-    "--ocr-lang", HYBRID_OCR_LANG,
-    "--enrich-formula",
-    "--no-enrich-picture-description",
     "--device", "auto",
   ];
 }
@@ -300,27 +260,6 @@ function getHybridEnv(): NodeJS.ProcessEnv {
       process.env.PATH || "",
     ].filter(Boolean).join(":"),
   };
-}
-
-function getConversionOptions(mode: ConversionMode, settings: PdfToMdSettings, outputDir: string): any {
-  const opts: any = { ...mode.options, outputDir, quiet: false };
-  if (mode.requiresHybrid) {
-    opts.hybridUrl = settings.hybridUrl;
-    opts.hybridTimeout = settings.hybridTimeout;
-    opts.hybridFallback = settings.hybridFallback;
-  }
-  return opts;
-}
-
-function checkJavaAvailable(): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const proc = spawn("java", ["-version"], { stdio: "pipe" });
-    proc.on("close", (code) => {
-      if (code === 0) resolve();
-      else reject(new JavaNotFoundError());
-    });
-    proc.on("error", () => reject(new JavaNotFoundError()));
-  });
 }
 
 async function isHybridBackendAvailable(settings: PdfToMdSettings): Promise<boolean> {
@@ -387,8 +326,6 @@ function delay(ms: number): Promise<void> {
 
 // ─── PDF conversion functions ────────────────────────────────────────────────
 
-const JAR_NAME = "opendataloader-pdf-cli.jar";
-
 function getVaultPath(app: App): string {
   const adapter = app.vault.adapter as any;
   if (adapter.basePath && typeof adapter.basePath === "string") return adapter.basePath;
@@ -406,105 +343,65 @@ function getPluginDir(app: App, manifest: any): string {
   return path.join(vaultPath, configDir, "plugins", manifest.id);
 }
 
-function getJarPath(pluginDir: string): string {
-  const candidates = [
-    path.join(pluginDir, "node_modules", "@opendataloader", "pdf", "lib", JAR_NAME),
-    path.join(pluginDir, "node_modules", "@opendataloader", "pdf", "dist", "lib", JAR_NAME),
-    path.join(__dirname, "node_modules", "@opendataloader", "pdf", "lib", JAR_NAME),
-    path.join(__dirname, "node_modules", "@opendataloader", "pdf", "dist", "lib", JAR_NAME),
-    path.join(process.cwd(), "node_modules", "@opendataloader", "pdf", "lib", JAR_NAME),
-    path.join(process.cwd(), "node_modules", "@opendataloader", "pdf", "dist", "lib", JAR_NAME)
-  ];
-
-  const jarPath = candidates.find((candidate) => fs.existsSync(candidate));
-
-  if (!jarPath) {
-    throw new JarNotFoundError(candidates);
-  }
-
-  return jarPath;
+interface ConvertRequest {
+  inputPath: string;
+  outputDir: string;
+  imageDir?: string;
+  exportImages: boolean;
+  mode: ConversionMode;
+  settings: PdfToMdSettings;
 }
 
-function executeJar(pluginDir: string, args: string[]): { promise: Promise<string>; process: ChildProcess } {
-  const jarPath = getJarPath(pluginDir);
-  const javaProcess = spawn("java", ["-jar", jarPath, ...args]);
+function convertPdf(request: ConvertRequest): { promise: Promise<string>; process: ChildProcess } {
+  if (!fs.existsSync(OPENDATALOADER_CLI)) throw new CliNotFoundError();
+  if (!fs.existsSync(request.inputPath)) throw new Error(`PDF file not found: ${request.inputPath}`);
+
+  const args = buildCliArgs(request);
+  const cliProcess = spawn(OPENDATALOADER_CLI, args, {
+    env: getHybridEnv(),
+  });
   let stdout = "";
   let stderr = "";
 
-  javaProcess.stdout.on("data", (data) => { stdout += data.toString(); });
-  javaProcess.stderr.on("data", (data) => { stderr += data.toString(); });
+  cliProcess.stdout.on("data", (data) => { stdout += data.toString(); });
+  cliProcess.stderr.on("data", (data) => { stderr += data.toString(); });
 
   const promise = new Promise<string>((resolve, reject) => {
-    javaProcess.on("close", (code) => {
+    cliProcess.on("close", (code) => {
       if (code === 0) {
         resolve(stdout);
       } else {
-        reject(new Error(`The opendataloader-pdf CLI exited with code ${code}.\n\n${stderr || stdout}`));
+        reject(new Error(`opendataloader-pdf exited with code ${code}.\n\n${stderr || stdout}`));
       }
     });
 
-    javaProcess.on("error", (err) => {
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-        reject(new JavaNotFoundError());
-      } else {
-        reject(err);
-      }
-    });
+    cliProcess.on("error", reject);
   });
 
-  return { promise, process: javaProcess };
+  return { promise, process: cliProcess };
 }
 
-function buildArgs(options: any): string[] {
-  const args: string[] = [];
-  if (options.outputDir) args.push("--output-dir", options.outputDir);
-  if (options.password) args.push("--password", options.password);
-  if (options.format) {
-    if (Array.isArray(options.format)) {
-      if (options.format.length > 0) args.push("--format", options.format.join(","));
-    } else {
-      args.push("--format", options.format);
-    }
+function buildCliArgs(request: ConvertRequest): string[] {
+  const args = [
+    request.inputPath,
+    "--output-dir", request.outputDir,
+    "--format", "markdown",
+    "--keep-line-breaks",
+    "--table-method", "cluster",
+    "--image-output", request.exportImages ? "external" : "off",
+  ];
+
+  if (request.exportImages && request.imageDir) args.push("--image-dir", request.imageDir);
+  if (request.mode.requiresHybrid) {
+    args.push(
+      "--hybrid", "docling-fast",
+      "--hybrid-mode", "auto",
+      "--hybrid-url", request.settings.hybridUrl,
+      "--hybrid-timeout", request.settings.hybridTimeout
+    );
   }
-  if (options.quiet) args.push("--quiet");
-  if (options.contentSafetyOff) {
-    if (Array.isArray(options.contentSafetyOff)) {
-      if (options.contentSafetyOff.length > 0) args.push("--content-safety-off", options.contentSafetyOff.join(","));
-    } else {
-      args.push("--content-safety-off", options.contentSafetyOff);
-    }
-  }
-  if (options.sanitize) args.push("--sanitize");
-  if (options.keepLineBreaks) args.push("--keep-line-breaks");
-  if (options.replaceInvalidChars) args.push("--replace-invalid-chars", options.replaceInvalidChars);
-  if (options.useStructTree) args.push("--use-struct-tree");
-  if (options.tableMethod) args.push("--table-method", options.tableMethod);
-  if (options.readingOrder) args.push("--reading-order", options.readingOrder);
-  if (options.markdownPageSeparator) args.push("--markdown-page-separator", options.markdownPageSeparator);
-  if (options.textPageSeparator) args.push("--text-page-separator", options.textPageSeparator);
-  if (options.htmlPageSeparator) args.push("--html-page-separator", options.htmlPageSeparator);
-  if (options.imageOutput) args.push("--image-output", options.imageOutput);
-  if (options.imageFormat) args.push("--image-format", options.imageFormat);
-  if (options.imageDir) args.push("--image-dir", options.imageDir);
-  if (options.pages) args.push("--pages", options.pages);
-  if (options.includeHeaderFooter) args.push("--include-header-footer");
-  if (options.detectStrikethrough) args.push("--detect-strikethrough");
-  if (options.hybrid && options.hybrid !== "off") args.push("--hybrid", options.hybrid);
-  if (options.hybridMode) args.push("--hybrid-mode", options.hybridMode);
-  if (options.hybridUrl) args.push("--hybrid-url", options.hybridUrl);
-  if (options.hybridTimeout != null && options.hybridTimeout !== "") args.push("--hybrid-timeout", String(options.hybridTimeout));
-  if (options.hybridFallback) args.push("--hybrid-fallback");
-  if (options.toStdout) args.push("--to-stdout");
+
   return args;
-}
-
-function convert(pluginDir: string, inputPaths: string | string[], options: any = {}): { promise: Promise<string>; process: ChildProcess } {
-  const inputList = Array.isArray(inputPaths) ? inputPaths : [inputPaths];
-  if (inputList.length === 0) throw new Error("At least one input path must be provided.");
-  for (const input of inputList) {
-    if (!fs.existsSync(input)) throw new Error(`Input file or folder not found: ${input}`);
-  }
-  return executeJar(pluginDir, [...inputList, ...buildArgs(options)]);
 }
 
 // ─── Settings ────────────────────────────────────────────────────────────────
@@ -562,17 +459,6 @@ class PdfToMdSettingTab extends PluginSettingTab {
           })
       );
 
-    new Setting(containerEl)
-      .setName("Fallback to local processing")
-      .setDesc("When enabled, hybrid modes can fall back to Java-only conversion if the backend fails.")
-      .addToggle((toggle) =>
-        toggle
-          .setValue(this.plugin.settings.hybridFallback)
-          .onChange(async (value) => {
-            this.plugin.settings.hybridFallback = value;
-            await this.plugin.saveSettings();
-          })
-      );
   }
 }
 
@@ -584,11 +470,12 @@ class ConvertModal extends Modal {
   private nameInput: HTMLInputElement;
   private folderInput: HTMLInputElement;
   private imageInput: HTMLInputElement;
+  private exportImagesInput: HTMLInputElement;
   private statusEl: HTMLElement;
   private convertBtn: HTMLButtonElement;
   private modeDescEl: HTMLElement;
   private selectedModeId: string;
-  private activeProcess: ChildProcess | null = null;
+  private formDisabled = false;
 
   constructor(app: App, plugin: PdfToMdPlugin, file: TFile) {
     super(app);
@@ -629,6 +516,17 @@ class ConvertModal extends Modal {
       this.plugin.settings.lastImageFolder
     );
 
+    const imageToggleRow = contentEl.createDiv("pcm-toggle-row");
+    imageToggleRow.createEl("span", { cls: "pcm-row-tag", text: "PIC" });
+    const toggleLabel = imageToggleRow.createEl("label", { cls: "pcm-toggle-label" });
+    this.exportImagesInput = toggleLabel.createEl("input", {
+      attr: { type: "checkbox" }
+    });
+    this.exportImagesInput.checked = this.plugin.settings.exportImages;
+    toggleLabel.createEl("span", { cls: "pcm-toggle-box" });
+    toggleLabel.createEl("span", { cls: "pcm-toggle-text", text: "Export images" });
+    this.exportImagesInput.onchange = () => this.updateImageControls();
+
     // ── Mode pills ──
     const modeBar = contentEl.createDiv("pcm-mode-bar");
     CONVERSION_MODES.forEach(mode => {
@@ -664,6 +562,7 @@ class ConvertModal extends Modal {
     });
 
     this.updateModeDescription();
+    this.updateImageControls();
     setTimeout(() => this.nameInput.focus(), 50);
   }
 
@@ -698,6 +597,7 @@ class ConvertModal extends Modal {
   private updateModeDescription() {
     const mode = CONVERSION_MODES.find(m => m.id === this.selectedModeId);
     this.modeDescEl.textContent = mode ? mode.description : "";
+    this.updateImageControls();
   }
 
   private async runConvert() {
@@ -723,7 +623,10 @@ class ConvertModal extends Modal {
     }
 
     const imageFolder = this.imageInput?.value?.trim();
-    if (imageFolder) {
+    const selectedMode = getMode(this.selectedModeId);
+    const exportImagesPreference = !!this.exportImagesInput?.checked;
+    const exportImages = !!selectedMode.requiresHybrid && exportImagesPreference;
+    if (exportImages && imageFolder) {
       if (imageFolder.split('/').some(s => s === '..' || /[\\:*?"<>|]/.test(s))) {
         this.setStatus("error", 'Image folder path is invalid');
         if (this.imageInput) this.imageInput.focus();
@@ -732,11 +635,10 @@ class ConvertModal extends Modal {
     }
 
     this.setFormDisabled(true);
-    this.setStatus("converting", "Checking Java installation...");
+    this.setStatus("converting", "Preparing conversion...");
 
     try {
-      await this.rememberFolders(outputFolder, imageFolder);
-      await checkJavaAvailable();
+      await this.rememberSettings(outputFolder, imageFolder, exportImagesPreference);
 
       new Notice(`📄 Converting ${this.file.name} to Markdown...`);
 
@@ -758,35 +660,33 @@ class ConvertModal extends Modal {
         throw new Error(`PDF file not found: ${pdfAbs}`);
       }
 
-      const selectedMode = getMode(this.selectedModeId);
-
       if (selectedMode.requiresHybrid) {
-        this.setStatus("converting", "Starting hybrid backend with OCR and formula support...");
+        this.setStatus("converting", "Starting hybrid backend with OCR support...");
         await this.plugin.ensureHybridBackend();
       }
       this.setStatus("converting", `Converting with ${selectedMode.name}...`);
 
-      const conversionOptions = getConversionOptions(selectedMode, this.plugin.settings, outputDir);
-      if (imageFolder) {
+      let imageDir: string | undefined;
+      if (exportImages && imageFolder) {
         const baseImageDir = path.isAbsolute(imageFolder)
           ? imageFolder
           : path.join(vaultPath, imageFolder);
 
-        // Create a subfolder named after the PDF file to avoid overwriting images from different documents
-        const imageDir = path.join(baseImageDir, this.file.basename);
+        imageDir = path.join(baseImageDir, this.file.basename);
         if (!fs.existsSync(imageDir)) {
           fs.mkdirSync(imageDir, { recursive: true });
         }
-        conversionOptions.imageDir = imageDir;
       }
 
-      const { promise: conversionPromise, process: javaProcess } = convert(this.plugin.getPluginDir(), [pdfAbs], conversionOptions);
-      this.activeProcess = javaProcess;
-      try {
-        await conversionPromise;
-      } finally {
-        this.activeProcess = null;
-      }
+      const { promise: conversionPromise } = convertPdf({
+        inputPath: pdfAbs,
+        outputDir,
+        imageDir,
+        exportImages,
+        mode: selectedMode,
+        settings: this.plugin.settings,
+      });
+      await conversionPromise;
 
       const expectedMdPath = path.join(outputDir, this.file.basename + ".md");
       if (!fs.existsSync(expectedMdPath)) {
@@ -810,10 +710,8 @@ class ConvertModal extends Modal {
     } catch (e: any) {
       let errorMessage: string;
 
-      if (e instanceof JavaNotFoundError) {
+      if (e instanceof CliNotFoundError) {
         errorMessage = e.message;
-      } else if (e instanceof JarNotFoundError) {
-        errorMessage = "PDF conversion library not found. Please reinstall the plugin.";
       } else if (e instanceof HybridBackendError) {
         const selectedMode = getMode(this.selectedModeId);
         const command = getHybridServerCommand(selectedMode, this.plugin.settings) || `${HYBRID_BACKEND_BIN} --port 5012`;
@@ -833,20 +731,40 @@ class ConvertModal extends Modal {
   }
 
   private setFormDisabled(disabled: boolean) {
+    this.formDisabled = disabled;
     if (this.nameInput) this.nameInput.disabled = disabled;
     if (this.folderInput) this.folderInput.disabled = disabled;
-    if (this.imageInput) this.imageInput.disabled = disabled;
+    this.updateImageControls();
     if (this.convertBtn) this.convertBtn.disabled = disabled;
-    this.contentEl.querySelectorAll(".pcm-mode-btn, .pcm-browse-btn").forEach((btn: HTMLElement) => {
+    this.contentEl.querySelectorAll(".pcm-mode-btn, .pcm-browse-btn, .pcm-toggle-label input").forEach((btn: HTMLElement) => {
       if (disabled) btn.setAttribute("disabled", "");
       else btn.removeAttribute("disabled");
     });
   }
 
-  private async rememberFolders(outputFolder: string, imageFolder: string) {
+  private async rememberSettings(outputFolder: string, imageFolder: string, exportImages: boolean) {
     this.plugin.settings.lastOutputFolder = outputFolder || "";
     this.plugin.settings.lastImageFolder = imageFolder || "";
+    this.plugin.settings.exportImages = exportImages;
     await this.plugin.saveSettings();
+  }
+
+  private updateImageControls() {
+    const selectedMode = getMode(this.selectedModeId);
+    const modeAllowsImages = !!selectedMode.requiresHybrid;
+    const enabled = modeAllowsImages && !!this.exportImagesInput?.checked;
+    if (this.exportImagesInput) {
+      this.exportImagesInput.disabled = this.formDisabled || !modeAllowsImages;
+    }
+    if (this.imageInput) {
+      this.imageInput.disabled = this.formDisabled || !enabled;
+      this.imageInput.parentElement?.toggleClass("is-disabled", !modeAllowsImages || !enabled);
+    }
+    this.contentEl.querySelector(".pcm-toggle-row")?.toggleClass("is-disabled", !modeAllowsImages);
+    const toggleText = this.contentEl.querySelector(".pcm-toggle-text");
+    if (toggleText) {
+      toggleText.textContent = modeAllowsImages ? "Export images" : "Hybrid images only";
+    }
   }
 
   private setStatus(type: "idle" | "converting" | "done" | "error", text: string) {
@@ -861,7 +779,6 @@ class ConvertModal extends Modal {
   }
 
   onClose() {
-    this.activeProcess?.kill("SIGTERM");
     this.contentEl.empty();
   }
 }
