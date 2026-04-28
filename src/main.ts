@@ -196,7 +196,7 @@ function getConversionOptions(mode: ConversionMode, settings: PdfToMdSettings, o
   return opts;
 }
 
-async function checkJavaAvailable(): Promise<void> {
+function checkJavaAvailable(): Promise<void> {
   return new Promise((resolve, reject) => {
     const proc = spawn("java", ["-version"], { stdio: "pipe" });
     proc.on("close", (code) => {
@@ -295,7 +295,7 @@ function executeJar(pluginDir: string, args: string[]): { promise: Promise<strin
 }
 
 function buildArgs(options: any): string[] {
-  const args = [];
+  const args: string[] = [];
   if (options.outputDir) args.push("--output-dir", options.outputDir);
   if (options.password) args.push("--password", options.password);
   if (options.format) {
@@ -558,9 +558,8 @@ class ConvertModal extends Modal {
 
     const outputFolder = this.folderInput?.value?.trim();
     if (outputFolder) {
-      const outputFolderName = outputFolder.split('/').pop() || outputFolder;
-      if (/[/\\:*?"<>|]/.test(outputFolderName)) {
-        this.setStatus("error", 'Folder name contains invalid characters: / \\ : * ? " < > |');
+      if (outputFolder.split('/').some(s => s === '..' || /[\\:*?"<>|]/.test(s))) {
+        this.setStatus("error", 'Output folder path is invalid');
         if (this.folderInput) this.folderInput.focus();
         return;
       }
@@ -568,9 +567,8 @@ class ConvertModal extends Modal {
 
     const imageFolder = this.imageInput?.value?.trim();
     if (imageFolder) {
-      const imageFolderName = imageFolder.split('/').pop() || imageFolder;
-      if (/[/\\:*?"<>|]/.test(imageFolderName)) {
-        this.setStatus("error", 'Image folder name contains invalid characters: / \\ : * ? " < > |');
+      if (imageFolder.split('/').some(s => s === '..' || /[\\:*?"<>|]/.test(s))) {
+        this.setStatus("error", 'Image folder path is invalid');
         if (this.imageInput) this.imageInput.focus();
         return;
       }

@@ -194,7 +194,7 @@ function getConversionOptions(mode, settings, outputDir) {
   }
   return opts;
 }
-async function checkJavaAvailable() {
+function checkJavaAvailable() {
   return new Promise((resolve, reject) => {
     const proc = (0, import_child_process.spawn)("java", ["-version"], { stdio: "pipe" });
     proc.on("close", (code) => {
@@ -528,9 +528,8 @@ var ConvertModal = class extends import_obsidian.Modal {
     }
     const outputFolder = (_d = (_c = this.folderInput) == null ? void 0 : _c.value) == null ? void 0 : _d.trim();
     if (outputFolder) {
-      const outputFolderName = outputFolder.split("/").pop() || outputFolder;
-      if (/[/\\:*?"<>|]/.test(outputFolderName)) {
-        this.setStatus("error", 'Folder name contains invalid characters: / \\ : * ? " < > |');
+      if (outputFolder.split("/").some((s) => s === ".." || /[\\:*?"<>|]/.test(s))) {
+        this.setStatus("error", "Output folder path is invalid");
         if (this.folderInput)
           this.folderInput.focus();
         return;
@@ -538,9 +537,8 @@ var ConvertModal = class extends import_obsidian.Modal {
     }
     const imageFolder = (_f = (_e = this.imageInput) == null ? void 0 : _e.value) == null ? void 0 : _f.trim();
     if (imageFolder) {
-      const imageFolderName = imageFolder.split("/").pop() || imageFolder;
-      if (/[/\\:*?"<>|]/.test(imageFolderName)) {
-        this.setStatus("error", 'Image folder name contains invalid characters: / \\ : * ? " < > |');
+      if (imageFolder.split("/").some((s) => s === ".." || /[\\:*?"<>|]/.test(s))) {
+        this.setStatus("error", "Image folder path is invalid");
         if (this.imageInput)
           this.imageInput.focus();
         return;
