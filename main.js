@@ -132,30 +132,36 @@ var PdfToMdPlugin = class extends import_obsidian.Plugin {
     new ConvertModal(this.app, this, file).open();
   }
   async ensureHybridBackend() {
-    var _a;
+    var _a, _b;
     if (await isHybridBackendAvailable(this.settings))
       return;
     if (this.hybridBackendProcess && !this.hybridBackendProcess.killed) {
       await waitForHybridBackend(this.settings, HYBRID_STARTUP_TIMEOUT_MS, this.hybridBackendProcess);
       return;
     }
-    if (!fs.existsSync(HYBRID_BACKEND_BIN)) {
-      throw new HybridBackendError(this.settings.hybridUrl, `Missing executable: ${HYBRID_BACKEND_BIN}`);
+    if (!fs.existsSync(HYBRID_BACKEND_BIN) || !fs.existsSync(HYBRID_PYTHON_BIN)) {
+      throw new HybridBackendError(
+        this.settings.hybridUrl,
+        `Missing conda executable. Checked: ${HYBRID_BACKEND_BIN}, ${HYBRID_PYTHON_BIN}`
+      );
     }
-    const proc = (0, import_child_process.spawn)(HYBRID_BACKEND_BIN, getHybridServerArgs(this.settings), {
+    const logPath = path.join(this.pluginDir, HYBRID_LOG_NAME);
+    fs.writeFileSync(logPath, `Starting hybrid backend at ${(/* @__PURE__ */ new Date()).toISOString()}
+`);
+    const proc = (0, import_child_process.spawn)(HYBRID_PYTHON_BIN, [HYBRID_BACKEND_BIN, ...getHybridServerArgs(this.settings)], {
+      cwd: this.pluginDir,
       stdio: "pipe",
       detached: false,
-      env: {
-        ...process.env,
-        PATH: `/opt/anaconda3/bin:${(_a = process.env.PATH) != null ? _a : ""}`
-      }
+      env: getHybridEnv()
     });
     this.hybridBackendProcess = proc;
+    (_a = proc.stdout) == null ? void 0 : _a.on("data", (data) => fs.appendFileSync(logPath, data.toString()));
+    (_b = proc.stderr) == null ? void 0 : _b.on("data", (data) => fs.appendFileSync(logPath, data.toString()));
     proc.once("close", () => {
       if (this.hybridBackendProcess === proc)
         this.hybridBackendProcess = null;
     });
-    await waitForHybridBackend(this.settings, HYBRID_STARTUP_TIMEOUT_MS, proc);
+    await waitForHybridBackend(this.settings, HYBRID_STARTUP_TIMEOUT_MS, proc, logPath);
   }
   onunload() {
     if (this.hybridBackendProcess) {
@@ -166,16 +172,18 @@ var PdfToMdPlugin = class extends import_obsidian.Plugin {
 };
 var DEFAULT_SETTINGS = {
   defaultMode: "fast",
-  hybridUrl: "http://127.0.0.1:5002",
+  hybridUrl: "http://127.0.0.1:5012",
   hybridTimeout: "0",
   hybridFallback: false,
   lastOutputFolder: "",
   lastImageFolder: ""
 };
 var HYBRID_BACKEND_BIN = "/opt/anaconda3/bin/opendataloader-pdf-hybrid";
+var HYBRID_PYTHON_BIN = "/opt/anaconda3/bin/python3.12";
 var HYBRID_OCR_LANG = "ch_sim,en";
 var HYBRID_STARTUP_TIMEOUT_MS = 18e4;
 var HEALTH_CHECK_TIMEOUT_MS = 2500;
+var HYBRID_LOG_NAME = "hybrid-backend.log";
 var CONVERSION_MODES = [
   {
     id: "fast",
@@ -222,6 +230,8 @@ function normalizeHybridUrl(value) {
     const url = new URL(value || DEFAULT_SETTINGS.hybridUrl);
     if (url.hostname === "localhost")
       url.hostname = "127.0.0.1";
+    if (url.hostname === "127.0.0.1" && url.port === "5002")
+      url.port = "5012";
     return url.toString().replace(/\/$/, "");
   } catch (e) {
     return DEFAULT_SETTINGS.hybridUrl;
@@ -229,9 +239,9 @@ function normalizeHybridUrl(value) {
 }
 function getHybridPort(settings) {
   try {
-    return new URL(settings.hybridUrl).port || "5002";
+    return new URL(settings.hybridUrl).port || "5012";
   } catch (e) {
-    return "5002";
+    return "5012";
   }
 }
 function getHybridHost(settings) {
@@ -262,6 +272,29 @@ function getHybridServerArgs(settings) {
     "auto"
   ];
 }
+function getHybridEnv() {
+  return {
+    ...process.env,
+    CONDA_PREFIX: "/opt/anaconda3",
+    CONDA_DEFAULT_ENV: "base",
+    CONDA_SHLVL: process.env.CONDA_SHLVL || "1",
+    PYTHONNOUSERSITE: "1",
+    HOME: process.env.HOME || "/Users/waltry",
+    LANG: process.env.LANG || "en_US.UTF-8",
+    LC_ALL: process.env.LC_ALL || process.env.LANG || "en_US.UTF-8",
+    PATH: [
+      "/opt/anaconda3/bin",
+      "/opt/anaconda3/condabin",
+      "/opt/homebrew/bin",
+      "/usr/local/bin",
+      "/usr/bin",
+      "/bin",
+      "/usr/sbin",
+      "/sbin",
+      process.env.PATH || ""
+    ].filter(Boolean).join(":")
+  };
+}
 function getConversionOptions(mode, settings, outputDir) {
   const opts = { ...mode.options, outputDir, quiet: false };
   if (mode.requiresHybrid) {
@@ -286,28 +319,44 @@ function checkJavaAvailable() {
 async function isHybridBackendAvailable(settings) {
   return requestOk(`${settings.hybridUrl.replace(/\/+$/, "")}/health`, HEALTH_CHECK_TIMEOUT_MS);
 }
-async function waitForHybridBackend(settings, timeoutMs, proc) {
+async function waitForHybridBackend(settings, timeoutMs, proc, logPath) {
   var _a, _b;
   const startedAt = Date.now();
   let output = "";
+  let processError = null;
   (_a = proc == null ? void 0 : proc.stdout) == null ? void 0 : _a.on("data", (data) => {
     output = (output + data.toString()).slice(-4e3);
   });
   (_b = proc == null ? void 0 : proc.stderr) == null ? void 0 : _b.on("data", (data) => {
     output = (output + data.toString()).slice(-4e3);
   });
+  proc == null ? void 0 : proc.once("error", (err) => {
+    processError = err;
+  });
   while (Date.now() - startedAt < timeoutMs) {
+    if (processError) {
+      throw new HybridBackendError(settings.hybridUrl, `Process error: ${processError.message}${logPath ? `
+Log: ${logPath}` : ""}`);
+    }
     if ((proc == null ? void 0 : proc.exitCode) !== null) {
-      throw new HybridBackendError(settings.hybridUrl, `Process exited with code ${proc.exitCode}${output ? `
-${output}` : ""}`);
+      throw new HybridBackendError(
+        settings.hybridUrl,
+        `Process exited with code ${proc.exitCode}${output ? `
+${output}` : ""}${logPath ? `
+Log: ${logPath}` : ""}`
+      );
     }
     if (await isHybridBackendAvailable(settings))
       return;
     await delay(1e3);
   }
   proc == null ? void 0 : proc.kill();
-  throw new HybridBackendError(settings.hybridUrl, `Startup timed out after ${Math.round(timeoutMs / 1e3)}s${output ? `
-${output}` : ""}`);
+  throw new HybridBackendError(
+    settings.hybridUrl,
+    `Startup timed out after ${Math.round(timeoutMs / 1e3)}s${output ? `
+${output}` : ""}${logPath ? `
+Log: ${logPath}` : ""}`
+  );
 }
 function requestOk(rawUrl, timeoutMs) {
   return new Promise((resolve) => {
@@ -492,7 +541,7 @@ var PdfToMdSettingTab = class extends import_obsidian.PluginSettingTab {
         await this.plugin.saveSettings();
       });
     });
-    new import_obsidian.Setting(containerEl).setName("Hybrid backend URL").setDesc("Used by Hybrid mode. The plugin starts the conda backend on http://127.0.0.1:5002 by default.").addText(
+    new import_obsidian.Setting(containerEl).setName("Hybrid backend URL").setDesc("Used by Hybrid mode. The plugin starts the conda backend on http://127.0.0.1:5012 by default.").addText(
       (text) => text.setPlaceholder(DEFAULT_SETTINGS.hybridUrl).setValue(this.plugin.settings.hybridUrl).onChange(async (value) => {
         this.plugin.settings.hybridUrl = normalizeHybridUrl(value.trim());
         await this.plugin.saveSettings();
@@ -653,6 +702,7 @@ var ConvertModal = class extends import_obsidian.Modal {
     this.setFormDisabled(true);
     this.setStatus("converting", "Checking Java installation...");
     try {
+      await this.rememberFolders(outputFolder, imageFolder);
       await checkJavaAvailable();
       new import_obsidian.Notice(`\u{1F4C4} Converting ${this.file.name} to Markdown...`);
       const vaultPath = getVaultPath(this.app);
@@ -705,9 +755,6 @@ Please check if the PDF file is valid and try again.`
       if (expectedMdPath !== targetMd) {
         fs.renameSync(expectedMdPath, targetMd);
       }
-      this.plugin.settings.lastOutputFolder = outputFolder || "";
-      this.plugin.settings.lastImageFolder = imageFolder || "";
-      await this.plugin.saveSettings();
       const outputLocation = outputFolder ? `${outputFolder}/${rawName}.md` : `${rawName}.md`;
       this.setStatus("done", `Saved as ${outputLocation}`);
       new import_obsidian.Notice(`\u2705 Successfully converted to ${outputLocation}`);
@@ -720,7 +767,7 @@ Please check if the PDF file is valid and try again.`
         errorMessage = "PDF conversion library not found. Please reinstall the plugin.";
       } else if (e instanceof HybridBackendError) {
         const selectedMode = getMode(this.selectedModeId);
-        const command = getHybridServerCommand(selectedMode, this.plugin.settings) || `${HYBRID_BACKEND_BIN} --port 5002`;
+        const command = getHybridServerCommand(selectedMode, this.plugin.settings) || `${HYBRID_BACKEND_BIN} --port 5012`;
         errorMessage = `Hybrid backend is required for this mode.
 
 Auto-start command:
@@ -752,6 +799,11 @@ ${e.message}`;
       else
         btn.removeAttribute("disabled");
     });
+  }
+  async rememberFolders(outputFolder, imageFolder) {
+    this.plugin.settings.lastOutputFolder = outputFolder || "";
+    this.plugin.settings.lastImageFolder = imageFolder || "";
+    await this.plugin.saveSettings();
   }
   setStatus(type, text) {
     if (this.statusEl) {

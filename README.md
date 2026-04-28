@@ -124,7 +124,7 @@ Hybrid mode requires the upstream Python hybrid package:
 pip install -U "opendataloader-pdf[hybrid]"
 ```
 
-When Hybrid is selected, the plugin starts the conda backend automatically on `http://127.0.0.1:5002` with OCR and formula enrichment enabled. Picture descriptions are disabled so no vision-language model is loaded.
+When Hybrid is selected, the plugin starts the conda backend automatically on `http://127.0.0.1:5012` with OCR and formula enrichment enabled. Picture descriptions are disabled so no vision-language model is loaded.
 
 Plugin settings let you choose the default conversion mode, hybrid backend URL, hybrid timeout, and fallback behavior. Fallback is off by default so backend failures are visible.
 
@@ -320,7 +320,7 @@ Hybrid 模式需要安装上游 Python hybrid 包：
 pip install -U "opendataloader-pdf[hybrid]"
 ```
 
-选择 Hybrid 时，插件会自动在 `http://127.0.0.1:5002` 启动 conda 后端，并启用 OCR 和公式增强。图片描述已关闭，因此不会加载视觉语言模型。
+选择 Hybrid 时，插件会自动在 `http://127.0.0.1:5012` 启动 conda 后端，并启用 OCR 和公式增强。图片描述已关闭，因此不会加载视觉语言模型。
 
 插件设置中可以调整默认转换模式、Hybrid 后端 URL、Hybrid 超时时间和 fallback 行为。Fallback 默认关闭，避免后端不可用时静默退回本地转换。
 

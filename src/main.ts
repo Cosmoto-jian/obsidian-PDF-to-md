@@ -120,25 +120,31 @@ export default class PdfToMdPlugin extends Plugin {
       return;
     }
 
-    if (!fs.existsSync(HYBRID_BACKEND_BIN)) {
-      throw new HybridBackendError(this.settings.hybridUrl, `Missing executable: ${HYBRID_BACKEND_BIN}`);
+    if (!fs.existsSync(HYBRID_BACKEND_BIN) || !fs.existsSync(HYBRID_PYTHON_BIN)) {
+      throw new HybridBackendError(
+        this.settings.hybridUrl,
+        `Missing conda executable. Checked: ${HYBRID_BACKEND_BIN}, ${HYBRID_PYTHON_BIN}`
+      );
     }
 
-    const proc = spawn(HYBRID_BACKEND_BIN, getHybridServerArgs(this.settings), {
+    const logPath = path.join(this.pluginDir, HYBRID_LOG_NAME);
+    fs.writeFileSync(logPath, `Starting hybrid backend at ${new Date().toISOString()}\n`);
+
+    const proc = spawn(HYBRID_PYTHON_BIN, [HYBRID_BACKEND_BIN, ...getHybridServerArgs(this.settings)], {
+      cwd: this.pluginDir,
       stdio: "pipe",
       detached: false,
-      env: {
-        ...process.env,
-        PATH: `/opt/anaconda3/bin:${process.env.PATH ?? ""}`,
-      },
+      env: getHybridEnv(),
     });
     this.hybridBackendProcess = proc;
 
+    proc.stdout?.on("data", (data) => fs.appendFileSync(logPath, data.toString()));
+    proc.stderr?.on("data", (data) => fs.appendFileSync(logPath, data.toString()));
     proc.once("close", () => {
       if (this.hybridBackendProcess === proc) this.hybridBackendProcess = null;
     });
 
-    await waitForHybridBackend(this.settings, HYBRID_STARTUP_TIMEOUT_MS, proc);
+    await waitForHybridBackend(this.settings, HYBRID_STARTUP_TIMEOUT_MS, proc, logPath);
   }
 
   onunload() {
@@ -162,7 +168,7 @@ interface PdfToMdSettings {
 
 const DEFAULT_SETTINGS: PdfToMdSettings = {
   defaultMode: "fast",
-  hybridUrl: "http://127.0.0.1:5002",
+  hybridUrl: "http://127.0.0.1:5012",
   hybridTimeout: "0",
   hybridFallback: false,
   lastOutputFolder: "",
@@ -170,9 +176,11 @@ const DEFAULT_SETTINGS: PdfToMdSettings = {
 };
 
 const HYBRID_BACKEND_BIN = "/opt/anaconda3/bin/opendataloader-pdf-hybrid";
+const HYBRID_PYTHON_BIN = "/opt/anaconda3/bin/python3.12";
 const HYBRID_OCR_LANG = "ch_sim,en";
 const HYBRID_STARTUP_TIMEOUT_MS = 180000;
 const HEALTH_CHECK_TIMEOUT_MS = 2500;
+const HYBRID_LOG_NAME = "hybrid-backend.log";
 
 interface ConversionMode {
   id: string;
@@ -229,6 +237,7 @@ function normalizeHybridUrl(value: string): string {
   try {
     const url = new URL(value || DEFAULT_SETTINGS.hybridUrl);
     if (url.hostname === "localhost") url.hostname = "127.0.0.1";
+    if (url.hostname === "127.0.0.1" && url.port === "5002") url.port = "5012";
     return url.toString().replace(/\/$/, "");
   } catch (e) {
     return DEFAULT_SETTINGS.hybridUrl;
@@ -237,9 +246,9 @@ function normalizeHybridUrl(value: string): string {
 
 function getHybridPort(settings: PdfToMdSettings): string {
   try {
-    return new URL(settings.hybridUrl).port || "5002";
+    return new URL(settings.hybridUrl).port || "5012";
   } catch (e) {
-    return "5002";
+    return "5012";
   }
 }
 
@@ -269,6 +278,30 @@ function getHybridServerArgs(settings: PdfToMdSettings): string[] {
   ];
 }
 
+function getHybridEnv(): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    CONDA_PREFIX: "/opt/anaconda3",
+    CONDA_DEFAULT_ENV: "base",
+    CONDA_SHLVL: process.env.CONDA_SHLVL || "1",
+    PYTHONNOUSERSITE: "1",
+    HOME: process.env.HOME || "/Users/waltry",
+    LANG: process.env.LANG || "en_US.UTF-8",
+    LC_ALL: process.env.LC_ALL || process.env.LANG || "en_US.UTF-8",
+    PATH: [
+      "/opt/anaconda3/bin",
+      "/opt/anaconda3/condabin",
+      "/opt/homebrew/bin",
+      "/usr/local/bin",
+      "/usr/bin",
+      "/bin",
+      "/usr/sbin",
+      "/sbin",
+      process.env.PATH || "",
+    ].filter(Boolean).join(":"),
+  };
+}
+
 function getConversionOptions(mode: ConversionMode, settings: PdfToMdSettings, outputDir: string): any {
   const opts: any = { ...mode.options, outputDir, quiet: false };
   if (mode.requiresHybrid) {
@@ -294,23 +327,34 @@ async function isHybridBackendAvailable(settings: PdfToMdSettings): Promise<bool
   return requestOk(`${settings.hybridUrl.replace(/\/+$/, "")}/health`, HEALTH_CHECK_TIMEOUT_MS);
 }
 
-async function waitForHybridBackend(settings: PdfToMdSettings, timeoutMs: number, proc?: ChildProcess): Promise<void> {
+async function waitForHybridBackend(settings: PdfToMdSettings, timeoutMs: number, proc?: ChildProcess, logPath?: string): Promise<void> {
   const startedAt = Date.now();
   let output = "";
+  let processError: Error | null = null;
 
   proc?.stdout?.on("data", (data) => { output = (output + data.toString()).slice(-4000); });
   proc?.stderr?.on("data", (data) => { output = (output + data.toString()).slice(-4000); });
+  proc?.once("error", (err) => { processError = err; });
 
   while (Date.now() - startedAt < timeoutMs) {
+    if (processError) {
+      throw new HybridBackendError(settings.hybridUrl, `Process error: ${processError.message}${logPath ? `\nLog: ${logPath}` : ""}`);
+    }
     if (proc?.exitCode !== null) {
-      throw new HybridBackendError(settings.hybridUrl, `Process exited with code ${proc.exitCode}${output ? `\n${output}` : ""}`);
+      throw new HybridBackendError(
+        settings.hybridUrl,
+        `Process exited with code ${proc.exitCode}${output ? `\n${output}` : ""}${logPath ? `\nLog: ${logPath}` : ""}`
+      );
     }
     if (await isHybridBackendAvailable(settings)) return;
     await delay(1000);
   }
 
   proc?.kill();
-  throw new HybridBackendError(settings.hybridUrl, `Startup timed out after ${Math.round(timeoutMs / 1000)}s${output ? `\n${output}` : ""}`);
+  throw new HybridBackendError(
+    settings.hybridUrl,
+    `Startup timed out after ${Math.round(timeoutMs / 1000)}s${output ? `\n${output}` : ""}${logPath ? `\nLog: ${logPath}` : ""}`
+  );
 }
 
 function requestOk(rawUrl: string, timeoutMs: number): Promise<boolean> {
@@ -494,7 +538,7 @@ class PdfToMdSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Hybrid backend URL")
-      .setDesc("Used by Hybrid mode. The plugin starts the conda backend on http://127.0.0.1:5002 by default.")
+      .setDesc("Used by Hybrid mode. The plugin starts the conda backend on http://127.0.0.1:5012 by default.")
       .addText((text) =>
         text
           .setPlaceholder(DEFAULT_SETTINGS.hybridUrl)
@@ -691,6 +735,7 @@ class ConvertModal extends Modal {
     this.setStatus("converting", "Checking Java installation...");
 
     try {
+      await this.rememberFolders(outputFolder, imageFolder);
       await checkJavaAvailable();
 
       new Notice(`📄 Converting ${this.file.name} to Markdown...`);
@@ -757,10 +802,6 @@ class ConvertModal extends Modal {
         fs.renameSync(expectedMdPath, targetMd);
       }
 
-      this.plugin.settings.lastOutputFolder = outputFolder || "";
-      this.plugin.settings.lastImageFolder = imageFolder || "";
-      await this.plugin.saveSettings();
-
       const outputLocation = outputFolder ? `${outputFolder}/${rawName}.md` : `${rawName}.md`;
       this.setStatus("done", `Saved as ${outputLocation}`);
       new Notice(`✅ Successfully converted to ${outputLocation}`);
@@ -775,7 +816,7 @@ class ConvertModal extends Modal {
         errorMessage = "PDF conversion library not found. Please reinstall the plugin.";
       } else if (e instanceof HybridBackendError) {
         const selectedMode = getMode(this.selectedModeId);
-        const command = getHybridServerCommand(selectedMode, this.plugin.settings) || `${HYBRID_BACKEND_BIN} --port 5002`;
+        const command = getHybridServerCommand(selectedMode, this.plugin.settings) || `${HYBRID_BACKEND_BIN} --port 5012`;
         errorMessage =
           `Hybrid backend is required for this mode.\n\n` +
           `Auto-start command:\n${command}\n\n` +
@@ -800,6 +841,12 @@ class ConvertModal extends Modal {
       if (disabled) btn.setAttribute("disabled", "");
       else btn.removeAttribute("disabled");
     });
+  }
+
+  private async rememberFolders(outputFolder: string, imageFolder: string) {
+    this.plugin.settings.lastOutputFolder = outputFolder || "";
+    this.plugin.settings.lastImageFolder = imageFolder || "";
+    await this.plugin.saveSettings();
   }
 
   private setStatus(type: "idle" | "converting" | "done" | "error", text: string) {
