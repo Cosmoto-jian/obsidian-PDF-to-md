@@ -103,12 +103,12 @@ File Explorer
 
 ## Conversion Modes
 
-The plugin intentionally exposes two top-level modes. This keeps the UI aligned with the actual upstream execution paths: local Java conversion, or hybrid backend conversion. OCR, formula enrichment, and picture descriptions are available as Hybrid enhancements instead of separate modes.
+The plugin intentionally exposes two top-level modes. This keeps the UI aligned with the actual upstream execution paths: local Java conversion, or hybrid backend conversion. OCR and formula enrichment are handled by Hybrid mode.
 
 | Mode | Best for | Backend command |
 |---|---|---|
 | Fast | Standard digital PDFs, quick local conversion | None |
-| Hybrid | Complex layouts and tables through the OpenDataLoader hybrid backend | `opendataloader-pdf-hybrid --port 5002` |
+| Hybrid | Complex layouts and tables through the OpenDataLoader hybrid backend | Auto-starts `/opt/anaconda3/bin/opendataloader-pdf-hybrid` |
 
 Hybrid enhancements change the backend command:
 
@@ -116,7 +116,7 @@ Hybrid enhancements change the backend command:
 |---|---|---|
 | OCR | `--force-ocr --ocr-lang "ch_sim,en"` | Keeps `--hybrid docling-fast` |
 | Formulas | `--enrich-formula` | Uses `--hybrid-mode full` |
-| Pictures | `--enrich-picture-description` | Uses `--hybrid-mode full` |
+| Pictures | `--no-enrich-picture-description` | Exports images without VLM-generated descriptions |
 
 Hybrid mode requires the upstream Python hybrid package:
 
@@ -124,11 +124,11 @@ Hybrid mode requires the upstream Python hybrid package:
 pip install -U "opendataloader-pdf[hybrid]"
 ```
 
-Start the backend in a terminal first, then run conversion from Obsidian.
+When Hybrid is selected, the plugin starts the conda backend automatically on `http://127.0.0.1:5002` with OCR and formula enrichment enabled. Picture descriptions are disabled so no vision-language model is loaded.
 
-Plugin settings let you choose the default conversion mode, hybrid backend URL, hybrid timeout, fallback behavior, and default Hybrid enhancements. Fallback is off by default so backend failures are visible.
+Plugin settings let you choose the default conversion mode, hybrid backend URL, hybrid timeout, and fallback behavior. Fallback is off by default so backend failures are visible.
 
-When Hybrid is selected, the plugin checks whether the configured backend URL is reachable before launching conversion.
+Before conversion, the plugin waits until the configured backend URL is reachable.
 
 ---
 
@@ -299,12 +299,12 @@ npm run build    # 编译，生成 main.js
 
 ## 转换模式
 
-插件只暴露两个顶层模式。这样 UI 和上游实际执行路径保持一致：要么本地 Java 转换，要么走 hybrid 后端转换。OCR、公式增强、图片描述作为 Hybrid 增强项，而不是单独模式。
+插件只暴露两个顶层模式。这样 UI 和上游实际执行路径保持一致：要么本地 Java 转换，要么走 hybrid 后端转换。OCR 和公式增强由 Hybrid 模式统一处理。
 
 | 模式 | 适用场景 | 后端启动命令 |
 |---|---|---|
 | Fast | 标准数字 PDF，快速本地转换 | 无需后端 |
-| Hybrid | 复杂排版、复杂表格，走 OpenDataLoader hybrid 后端 | `opendataloader-pdf-hybrid --port 5002` |
+| Hybrid | 复杂排版、复杂表格，走 OpenDataLoader hybrid 后端 | 自动启动 `/opt/anaconda3/bin/opendataloader-pdf-hybrid` |
 
 Hybrid 增强项会改变后端启动命令：
 
@@ -312,7 +312,7 @@ Hybrid 增强项会改变后端启动命令：
 |---|---|---|
 | OCR | `--force-ocr --ocr-lang "ch_sim,en"` | 保持 `--hybrid docling-fast` |
 | 公式 | `--enrich-formula` | 使用 `--hybrid-mode full` |
-| 图片描述 | `--enrich-picture-description` | 使用 `--hybrid-mode full` |
+| 图片 | `--no-enrich-picture-description` | 导出图片，但不调用视觉语言模型生成描述 |
 
 Hybrid 模式需要安装上游 Python hybrid 包：
 
@@ -320,11 +320,11 @@ Hybrid 模式需要安装上游 Python hybrid 包：
 pip install -U "opendataloader-pdf[hybrid]"
 ```
 
-先在终端启动对应后端命令，再回到 Obsidian 中执行转换。
+选择 Hybrid 时，插件会自动在 `http://127.0.0.1:5002` 启动 conda 后端，并启用 OCR 和公式增强。图片描述已关闭，因此不会加载视觉语言模型。
 
-插件设置中可以调整默认转换模式、Hybrid 后端 URL、Hybrid 超时时间、fallback 行为，以及默认 Hybrid 增强项。Fallback 默认关闭，避免后端不可用时静默退回本地转换。
+插件设置中可以调整默认转换模式、Hybrid 后端 URL、Hybrid 超时时间和 fallback 行为。Fallback 默认关闭，避免后端不可用时静默退回本地转换。
 
-选择 Hybrid 时，插件会先检查配置的后端 URL 是否可访问，再启动转换。
+正式转换前，插件会等待配置的后端 URL 可访问。
 
 ---
 

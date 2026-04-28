@@ -41,6 +41,8 @@ var import_obsidian = require("obsidian");
 var path = __toESM(require("path"));
 var fs = __toESM(require("fs"));
 var import_child_process = require("child_process");
+var http = __toESM(require("http"));
+var https = __toESM(require("https"));
 var JavaNotFoundError = class extends Error {
   constructor() {
     super(
@@ -70,6 +72,7 @@ var PdfToMdPlugin = class extends import_obsidian.Plugin {
   constructor() {
     super(...arguments);
     __publicField(this, "pluginDir", "");
+    __publicField(this, "hybridBackendProcess", null);
     __publicField(this, "settings");
   }
   async onload() {
@@ -81,7 +84,7 @@ var PdfToMdPlugin = class extends import_obsidian.Plugin {
         if (!(file instanceof import_obsidian.TFile) || file.extension.toLowerCase() !== "pdf")
           return;
         menu.addItem(
-          (item) => item.setTitle("Convert to Markdown").setIcon("file-text").onClick(() => new ConvertModal(this.app, file, this.pluginDir, this.settings, () => this.saveSettings()).open())
+          (item) => item.setTitle("Convert to Markdown").setIcon("file-text").onClick(() => this.openConvertModal(file))
         );
       })
     );
@@ -92,7 +95,7 @@ var PdfToMdPlugin = class extends import_obsidian.Plugin {
         const file = this.app.workspace.getActiveFile();
         if ((file == null ? void 0 : file.extension.toLowerCase()) === "pdf") {
           if (!checking)
-            new ConvertModal(this.app, file, this.pluginDir, this.settings, () => this.saveSettings()).open();
+            this.openConvertModal(file);
           return true;
         }
         return false;
@@ -111,7 +114,7 @@ var PdfToMdPlugin = class extends import_obsidian.Plugin {
         }
         const pdfFile = pdfFiles[0];
         menu.addItem(
-          (item) => item.setTitle("Convert to Markdown").setIcon("file-text").onClick(() => new ConvertModal(this.app, pdfFile, this.pluginDir, this.settings, () => this.saveSettings()).open())
+          (item) => item.setTitle("Convert to Markdown").setIcon("file-text").onClick(() => this.openConvertModal(pdfFile))
         );
       })
     );
@@ -122,15 +125,57 @@ var PdfToMdPlugin = class extends import_obsidian.Plugin {
   async saveSettings() {
     await this.saveData(this.settings);
   }
+  getPluginDir() {
+    return this.pluginDir;
+  }
+  openConvertModal(file) {
+    new ConvertModal(this.app, this, file).open();
+  }
+  async ensureHybridBackend() {
+    var _a;
+    if (await isHybridBackendAvailable(this.settings))
+      return;
+    if (this.hybridBackendProcess && !this.hybridBackendProcess.killed) {
+      await waitForHybridBackend(this.settings, HYBRID_STARTUP_TIMEOUT_MS, this.hybridBackendProcess);
+      return;
+    }
+    if (!fs.existsSync(HYBRID_BACKEND_BIN)) {
+      throw new HybridBackendError(this.settings.hybridUrl, `Missing executable: ${HYBRID_BACKEND_BIN}`);
+    }
+    const proc = (0, import_child_process.spawn)(HYBRID_BACKEND_BIN, getHybridServerArgs(this.settings), {
+      stdio: "pipe",
+      detached: false,
+      env: {
+        ...process.env,
+        PATH: `/opt/anaconda3/bin:${(_a = process.env.PATH) != null ? _a : ""}`
+      }
+    });
+    this.hybridBackendProcess = proc;
+    proc.once("close", () => {
+      if (this.hybridBackendProcess === proc)
+        this.hybridBackendProcess = null;
+    });
+    await waitForHybridBackend(this.settings, HYBRID_STARTUP_TIMEOUT_MS, proc);
+  }
+  onunload() {
+    if (this.hybridBackendProcess) {
+      this.hybridBackendProcess.kill();
+      this.hybridBackendProcess = null;
+    }
+  }
 };
 var DEFAULT_SETTINGS = {
   defaultMode: "fast",
-  hybridUrl: "http://localhost:5002",
+  hybridUrl: "http://127.0.0.1:5002",
   hybridTimeout: "0",
-  hybridFallback: true,
+  hybridFallback: false,
   lastOutputFolder: "",
   lastImageFolder: ""
 };
+var HYBRID_BACKEND_BIN = "/opt/anaconda3/bin/opendataloader-pdf-hybrid";
+var HYBRID_OCR_LANG = "ch_sim,en";
+var HYBRID_STARTUP_TIMEOUT_MS = 18e4;
+var HEALTH_CHECK_TIMEOUT_MS = 2500;
 var CONVERSION_MODES = [
   {
     id: "fast",
@@ -167,11 +212,20 @@ function normalizeSettings(settings) {
   if (!CONVERSION_MODES.some((mode) => mode.id === settings.defaultMode)) {
     settings.defaultMode = DEFAULT_SETTINGS.defaultMode;
   }
-  if (!settings.hybridUrl)
-    settings.hybridUrl = DEFAULT_SETTINGS.hybridUrl;
+  settings.hybridUrl = normalizeHybridUrl(settings.hybridUrl);
   if (!settings.hybridTimeout)
     settings.hybridTimeout = DEFAULT_SETTINGS.hybridTimeout;
   return settings;
+}
+function normalizeHybridUrl(value) {
+  try {
+    const url = new URL(value || DEFAULT_SETTINGS.hybridUrl);
+    if (url.hostname === "localhost")
+      url.hostname = "127.0.0.1";
+    return url.toString().replace(/\/$/, "");
+  } catch (e) {
+    return DEFAULT_SETTINGS.hybridUrl;
+  }
 }
 function getHybridPort(settings) {
   try {
@@ -180,10 +234,33 @@ function getHybridPort(settings) {
     return "5002";
   }
 }
+function getHybridHost(settings) {
+  try {
+    const host = new URL(settings.hybridUrl).hostname;
+    return host === "localhost" ? "127.0.0.1" : host;
+  } catch (e) {
+    return "127.0.0.1";
+  }
+}
 function getHybridServerCommand(mode, settings) {
   if (!mode.requiresHybrid)
     return null;
-  return `opendataloader-pdf-hybrid --port ${getHybridPort(settings)}`;
+  return `${HYBRID_BACKEND_BIN} ${getHybridServerArgs(settings).join(" ")}`;
+}
+function getHybridServerArgs(settings) {
+  return [
+    "--host",
+    getHybridHost(settings),
+    "--port",
+    getHybridPort(settings),
+    "--force-ocr",
+    "--ocr-lang",
+    HYBRID_OCR_LANG,
+    "--enrich-formula",
+    "--no-enrich-picture-description",
+    "--device",
+    "auto"
+  ];
 }
 function getConversionOptions(mode, settings, outputDir) {
   const opts = { ...mode.options, outputDir, quiet: false };
@@ -206,23 +283,56 @@ function checkJavaAvailable() {
     proc.on("error", () => reject(new JavaNotFoundError()));
   });
 }
-async function assertHybridBackendAvailable(settings) {
-  const timeoutMs = parseInt(settings.hybridTimeout, 10);
-  const effectiveTimeout = timeoutMs > 0 ? timeoutMs : 5e3;
-  const controller = new AbortController();
-  const timer = window.setTimeout(() => controller.abort(), effectiveTimeout);
-  try {
-    const healthUrl = settings.hybridUrl.replace(/\/+$/, "") + "/health";
-    const response = await fetch(healthUrl, { method: "GET", signal: controller.signal });
-    if (!response.ok)
-      throw new HybridBackendError(settings.hybridUrl, `HTTP ${response.status}`);
-  } catch (e) {
-    if (e instanceof HybridBackendError)
-      throw e;
-    throw new HybridBackendError(settings.hybridUrl);
-  } finally {
-    window.clearTimeout(timer);
+async function isHybridBackendAvailable(settings) {
+  return requestOk(`${settings.hybridUrl.replace(/\/+$/, "")}/health`, HEALTH_CHECK_TIMEOUT_MS);
+}
+async function waitForHybridBackend(settings, timeoutMs, proc) {
+  var _a, _b;
+  const startedAt = Date.now();
+  let output = "";
+  (_a = proc == null ? void 0 : proc.stdout) == null ? void 0 : _a.on("data", (data) => {
+    output = (output + data.toString()).slice(-4e3);
+  });
+  (_b = proc == null ? void 0 : proc.stderr) == null ? void 0 : _b.on("data", (data) => {
+    output = (output + data.toString()).slice(-4e3);
+  });
+  while (Date.now() - startedAt < timeoutMs) {
+    if ((proc == null ? void 0 : proc.exitCode) !== null) {
+      throw new HybridBackendError(settings.hybridUrl, `Process exited with code ${proc.exitCode}${output ? `
+${output}` : ""}`);
+    }
+    if (await isHybridBackendAvailable(settings))
+      return;
+    await delay(1e3);
   }
+  proc == null ? void 0 : proc.kill();
+  throw new HybridBackendError(settings.hybridUrl, `Startup timed out after ${Math.round(timeoutMs / 1e3)}s${output ? `
+${output}` : ""}`);
+}
+function requestOk(rawUrl, timeoutMs) {
+  return new Promise((resolve) => {
+    let url;
+    try {
+      url = new URL(rawUrl);
+    } catch (e) {
+      resolve(false);
+      return;
+    }
+    const client = url.protocol === "https:" ? https : http;
+    const req = client.get(url, (res) => {
+      var _a, _b;
+      res.resume();
+      resolve(((_a = res.statusCode) != null ? _a : 0) >= 200 && ((_b = res.statusCode) != null ? _b : 0) < 400);
+    });
+    req.setTimeout(timeoutMs, () => {
+      req.destroy();
+      resolve(false);
+    });
+    req.on("error", () => resolve(false));
+  });
+}
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 var JAR_NAME = "opendataloader-pdf-cli.jar";
 function getVaultPath(app) {
@@ -382,9 +492,9 @@ var PdfToMdSettingTab = class extends import_obsidian.PluginSettingTab {
         await this.plugin.saveSettings();
       });
     });
-    new import_obsidian.Setting(containerEl).setName("Hybrid backend URL").setDesc("Used by all hybrid modes. The default OpenDataLoader backend listens on http://localhost:5002.").addText(
+    new import_obsidian.Setting(containerEl).setName("Hybrid backend URL").setDesc("Used by Hybrid mode. The plugin starts the conda backend on http://127.0.0.1:5002 by default.").addText(
       (text) => text.setPlaceholder(DEFAULT_SETTINGS.hybridUrl).setValue(this.plugin.settings.hybridUrl).onChange(async (value) => {
-        this.plugin.settings.hybridUrl = value.trim() || DEFAULT_SETTINGS.hybridUrl;
+        this.plugin.settings.hybridUrl = normalizeHybridUrl(value.trim());
         await this.plugin.saveSettings();
       })
     );
@@ -403,12 +513,10 @@ var PdfToMdSettingTab = class extends import_obsidian.PluginSettingTab {
   }
 };
 var ConvertModal = class extends import_obsidian.Modal {
-  constructor(app, file, pluginDir, settings, saveSettings) {
+  constructor(app, plugin, file) {
     super(app);
+    __publicField(this, "plugin");
     __publicField(this, "file");
-    __publicField(this, "pluginDir");
-    __publicField(this, "settings");
-    __publicField(this, "saveSettings");
     __publicField(this, "nameInput");
     __publicField(this, "folderInput");
     __publicField(this, "imageInput");
@@ -417,11 +525,9 @@ var ConvertModal = class extends import_obsidian.Modal {
     __publicField(this, "modeDescEl");
     __publicField(this, "selectedModeId");
     __publicField(this, "activeProcess", null);
+    this.plugin = plugin;
     this.file = file;
-    this.pluginDir = pluginDir;
-    this.settings = settings;
-    this.saveSettings = saveSettings;
-    this.selectedModeId = settings.defaultMode;
+    this.selectedModeId = plugin.settings.defaultMode;
   }
   onOpen() {
     const { contentEl } = this;
@@ -440,13 +546,13 @@ var ConvertModal = class extends import_obsidian.Modal {
       contentEl,
       "OUT",
       "Vault root if empty",
-      this.settings.lastOutputFolder
+      this.plugin.settings.lastOutputFolder
     );
     this.imageInput = this.createFolderRow(
       contentEl,
       "IMG",
       "Vault root if empty",
-      this.settings.lastImageFolder
+      this.plugin.settings.lastImageFolder
     );
     const modeBar = contentEl.createDiv("pcm-mode-bar");
     CONVERSION_MODES.forEach((mode) => {
@@ -566,11 +672,11 @@ var ConvertModal = class extends import_obsidian.Modal {
       }
       const selectedMode = getMode(this.selectedModeId);
       if (selectedMode.requiresHybrid) {
-        this.setStatus("converting", `Checking hybrid backend at ${this.settings.hybridUrl}...`);
-        await assertHybridBackendAvailable(this.settings);
+        this.setStatus("converting", "Starting hybrid backend with OCR and formula support...");
+        await this.plugin.ensureHybridBackend();
       }
       this.setStatus("converting", `Converting with ${selectedMode.name}...`);
-      const conversionOptions = getConversionOptions(selectedMode, this.settings, outputDir);
+      const conversionOptions = getConversionOptions(selectedMode, this.plugin.settings, outputDir);
       if (imageFolder) {
         const baseImageDir = path.isAbsolute(imageFolder) ? imageFolder : path.join(vaultPath, imageFolder);
         const imageDir = path.join(baseImageDir, this.file.basename);
@@ -579,7 +685,7 @@ var ConvertModal = class extends import_obsidian.Modal {
         }
         conversionOptions.imageDir = imageDir;
       }
-      const { promise: conversionPromise, process: javaProcess } = convert(this.pluginDir, [pdfAbs], conversionOptions);
+      const { promise: conversionPromise, process: javaProcess } = convert(this.plugin.getPluginDir(), [pdfAbs], conversionOptions);
       this.activeProcess = javaProcess;
       try {
         await conversionPromise;
@@ -599,9 +705,9 @@ Please check if the PDF file is valid and try again.`
       if (expectedMdPath !== targetMd) {
         fs.renameSync(expectedMdPath, targetMd);
       }
-      this.settings.lastOutputFolder = outputFolder || "";
-      this.settings.lastImageFolder = imageFolder || "";
-      await this.saveSettings();
+      this.plugin.settings.lastOutputFolder = outputFolder || "";
+      this.plugin.settings.lastImageFolder = imageFolder || "";
+      await this.plugin.saveSettings();
       const outputLocation = outputFolder ? `${outputFolder}/${rawName}.md` : `${rawName}.md`;
       this.setStatus("done", `Saved as ${outputLocation}`);
       new import_obsidian.Notice(`\u2705 Successfully converted to ${outputLocation}`);
@@ -614,13 +720,13 @@ Please check if the PDF file is valid and try again.`
         errorMessage = "PDF conversion library not found. Please reinstall the plugin.";
       } else if (e instanceof HybridBackendError) {
         const selectedMode = getMode(this.selectedModeId);
-        const command = getHybridServerCommand(selectedMode, this.settings) || "opendataloader-pdf-hybrid --port 5002";
+        const command = getHybridServerCommand(selectedMode, this.plugin.settings) || `${HYBRID_BACKEND_BIN} --port 5002`;
         errorMessage = `Hybrid backend is required for this mode.
 
-Start it in a terminal first:
+Auto-start command:
 ${command}
 
-Then retry the conversion.`;
+${e.message}`;
       } else {
         errorMessage = (_g = e.message) != null ? _g : "Conversion failed";
       }
