@@ -1,7 +1,38 @@
 import { App, Plugin, Modal, TFile, Notice, PluginSettingTab, Setting, SuggestModal, TFolder } from "obsidian";
 import * as path from "path";
 import * as fs from "fs";
-import { execSync, spawn } from "child_process";
+import { spawn, ChildProcess } from "child_process";
+
+// ─── Custom Errors ────────────────────────────────────────────────────────────
+
+class JavaNotFoundError extends Error {
+  constructor() {
+    super(
+      "Java Runtime Environment (JRE) is required but not found.\n\n" +
+      "Please install Java from:\n" +
+      "• macOS: brew install openjdk\n" +
+      "• Or download from: https://www.java.com/download/"
+    );
+    this.name = "JavaNotFoundError";
+  }
+}
+
+class JarNotFoundError extends Error {
+  constructor(candidates: string[]) {
+    super(
+      `JAR file not found. Please run "npm install @opendataloader/pdf" in the plugin folder.\n\n` +
+      `Checked:\n${candidates.join("\n")}`
+    );
+    this.name = "JarNotFoundError";
+  }
+}
+
+class HybridBackendError extends Error {
+  constructor(url: string, detail?: string) {
+    super(`Hybrid backend is not reachable at ${url}${detail ? `: ${detail}` : ""}`);
+    this.name = "HybridBackendError";
+  }
+}
 
 // ─── Plugin ───────────────────────────────────────────────────────────────────
 
@@ -121,9 +152,6 @@ const CONVERSION_MODES: ConversionMode[] = [
       format: "markdown",
       hybrid: "docling-fast",
       hybridMode: "full",
-      hybridUrl: "http://localhost:5002",
-      hybridTimeout: "0",
-      hybridFallback: true,
       imageOutput: "external",
       tableMethod: "cluster",
       useStructTree: true
@@ -159,30 +187,40 @@ function getHybridServerCommand(mode: ConversionMode, settings: PdfToMdSettings)
 }
 
 function getConversionOptions(mode: ConversionMode, settings: PdfToMdSettings, outputDir: string): any {
-  return {
-    ...mode.options,
-    outputDir,
-    hybridUrl: settings.hybridUrl,
-    hybridTimeout: settings.hybridTimeout,
-    hybridFallback: settings.hybridFallback,
-    quiet: false
-  };
+  const opts: any = { ...mode.options, outputDir, quiet: false };
+  if (mode.requiresHybrid) {
+    opts.hybridUrl = settings.hybridUrl;
+    opts.hybridTimeout = settings.hybridTimeout;
+    opts.hybridFallback = settings.hybridFallback;
+  }
+  return opts;
 }
 
-async function assertHybridBackendAvailable(settings: PdfToMdSettings) {
-  const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), 2500);
+function checkJavaAvailable(): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn("java", ["-version"], { stdio: "pipe" });
+    proc.on("close", (code) => {
+      if (code === 0) resolve();
+      else reject(new JavaNotFoundError());
+    });
+    proc.on("error", () => reject(new JavaNotFoundError()));
+  });
+}
 
+async function assertHybridBackendAvailable(settings: PdfToMdSettings): Promise<void> {
+  const timeoutMs = parseInt(settings.hybridTimeout, 10);
+  const effectiveTimeout = timeoutMs > 0 ? timeoutMs : 5000;
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), effectiveTimeout);
   try {
     const healthUrl = settings.hybridUrl.replace(/\/+$/, "") + "/health";
-    await fetch(healthUrl, {
-      method: "GET",
-      signal: controller.signal
-    });
+    const response = await fetch(healthUrl, { method: "GET", signal: controller.signal });
+    if (!response.ok) throw new HybridBackendError(settings.hybridUrl, `HTTP ${response.status}`);
   } catch (e) {
-    throw new Error(`Hybrid backend is not reachable at ${settings.hybridUrl}`);
+    if (e instanceof HybridBackendError) throw e;
+    throw new HybridBackendError(settings.hybridUrl);
   } finally {
-    window.clearTimeout(timeout);
+    window.clearTimeout(timer);
   }
 }
 
@@ -220,60 +258,44 @@ function getJarPath(pluginDir: string): string {
   const jarPath = candidates.find((candidate) => fs.existsSync(candidate));
 
   if (!jarPath) {
-    throw new Error(
-      `JAR file not found. Please run "npm install @opendataloader/pdf" in the plugin folder.\n\n` +
-      `Checked:\n${candidates.join("\n")}`
-    );
+    throw new JarNotFoundError(candidates);
   }
 
   return jarPath;
 }
 
-function executeJar(pluginDir: string, args: string[], executionOptions: { streamOutput?: boolean } = {}) {
-  const { streamOutput = false } = executionOptions;
-  return new Promise((resolve, reject) => {
-    const jarPath = getJarPath(pluginDir);
-    const command = "java";
-    const commandArgs = ["-jar", jarPath, ...args];
+function executeJar(pluginDir: string, args: string[]): { promise: Promise<string>; process: ChildProcess } {
+  const jarPath = getJarPath(pluginDir);
+  const javaProcess = spawn("java", ["-jar", jarPath, ...args]);
+  let stdout = "";
+  let stderr = "";
 
-    const javaProcess = spawn(command, commandArgs);
-    let stdout = "";
-    let stderr = "";
+  javaProcess.stdout.on("data", (data) => { stdout += data.toString(); });
+  javaProcess.stderr.on("data", (data) => { stderr += data.toString(); });
 
-    javaProcess.stdout.on("data", (data) => {
-      const chunk = data.toString();
-      if (streamOutput) process.stdout.write(chunk);
-      stdout += chunk;
-    });
-
-    javaProcess.stderr.on("data", (data) => {
-      const chunk = data.toString();
-      if (streamOutput) process.stderr.write(chunk);
-      stderr += chunk;
-    });
-
+  const promise = new Promise<string>((resolve, reject) => {
     javaProcess.on("close", (code) => {
       if (code === 0) {
         resolve(stdout);
       } else {
-        const errorOutput = stderr || stdout;
-        const error = new Error(`The opendataloader-pdf CLI exited with code ${code}.\n\n${errorOutput}`);
-        reject(error);
+        reject(new Error(`The opendataloader-pdf CLI exited with code ${code}.\n\n${stderr || stdout}`));
       }
     });
 
     javaProcess.on("error", (err) => {
-      if (err.message.includes("ENOENT")) {
-        reject(new Error("'java' command not found. Please ensure Java is installed and in your system's PATH."));
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        reject(new JavaNotFoundError());
       } else {
         reject(err);
       }
     });
   });
+
+  return { promise, process: javaProcess };
 }
 
 function buildArgs(options: any): string[] {
-  const args = [];
+  const args: string[] = [];
   if (options.outputDir) args.push("--output-dir", options.outputDir);
   if (options.password) args.push("--password", options.password);
   if (options.format) {
@@ -309,24 +331,19 @@ function buildArgs(options: any): string[] {
   if (options.hybrid && options.hybrid !== "off") args.push("--hybrid", options.hybrid);
   if (options.hybridMode) args.push("--hybrid-mode", options.hybridMode);
   if (options.hybridUrl) args.push("--hybrid-url", options.hybridUrl);
-  if (options.hybridTimeout) args.push("--hybrid-timeout", String(options.hybridTimeout));
+  if (options.hybridTimeout != null && options.hybridTimeout !== "") args.push("--hybrid-timeout", String(options.hybridTimeout));
   if (options.hybridFallback) args.push("--hybrid-fallback");
   if (options.toStdout) args.push("--to-stdout");
   return args;
 }
 
-async function convert(pluginDir: string, inputPaths: string | string[], options: any = {}) {
+function convert(pluginDir: string, inputPaths: string | string[], options: any = {}): { promise: Promise<string>; process: ChildProcess } {
   const inputList = Array.isArray(inputPaths) ? inputPaths : [inputPaths];
-  if (inputList.length === 0) {
-    return Promise.reject(new Error("At least one input path must be provided."));
-  }
+  if (inputList.length === 0) throw new Error("At least one input path must be provided.");
   for (const input of inputList) {
-    if (!fs.existsSync(input)) {
-      return Promise.reject(new Error(`Input file or folder not found: ${input}`));
-    }
+    if (!fs.existsSync(input)) throw new Error(`Input file or folder not found: ${input}`);
   }
-  const args = [...inputList, ...buildArgs(options)];
-  return executeJar(pluginDir, args, { streamOutput: !options.quiet });
+  return executeJar(pluginDir, [...inputList, ...buildArgs(options)]);
 }
 
 // ─── Settings ────────────────────────────────────────────────────────────────
@@ -412,6 +429,7 @@ class ConvertModal extends Modal {
   private convertBtn: HTMLButtonElement;
   private modeDescEl: HTMLElement;
   private selectedModeId: string;
+  private activeProcess: ChildProcess | null = null;
 
   constructor(app: App, file: TFile, pluginDir: string, settings: PdfToMdSettings, saveSettings: () => Promise<void>) {
     super(app);
@@ -540,9 +558,8 @@ class ConvertModal extends Modal {
 
     const outputFolder = this.folderInput?.value?.trim();
     if (outputFolder) {
-      const outputFolderName = outputFolder.split('/').pop() || outputFolder;
-      if (/[/\\:*?"<>|]/.test(outputFolderName)) {
-        this.setStatus("error", 'Folder name contains invalid characters: / \\ : * ? " < > |');
+      if (outputFolder.split('/').some(s => s === '..' || /[\\:*?"<>|]/.test(s))) {
+        this.setStatus("error", 'Output folder path is invalid');
         if (this.folderInput) this.folderInput.focus();
         return;
       }
@@ -550,9 +567,8 @@ class ConvertModal extends Modal {
 
     const imageFolder = this.imageInput?.value?.trim();
     if (imageFolder) {
-      const imageFolderName = imageFolder.split('/').pop() || imageFolder;
-      if (/[/\\:*?"<>|]/.test(imageFolderName)) {
-        this.setStatus("error", 'Image folder name contains invalid characters: / \\ : * ? " < > |');
+      if (imageFolder.split('/').some(s => s === '..' || /[\\:*?"<>|]/.test(s))) {
+        this.setStatus("error", 'Image folder path is invalid');
         if (this.imageInput) this.imageInput.focus();
         return;
       }
@@ -562,20 +578,7 @@ class ConvertModal extends Modal {
     this.setStatus("converting", "Checking Java installation...");
 
     try {
-      try {
-        execSync("java -version", { stdio: "pipe" });
-      } catch (e) {
-        throw new Error(
-          "Java Runtime Environment (JRE) is required but not found.\n\n" +
-          "Please install Java from:\n" +
-          "• macOS: brew install openjdk\n" +
-          "• Or download from: https://www.java.com/download/"
-        );
-      }
-
-      if (!this.file || !this.file.path) {
-        throw new Error("Invalid PDF file: file or file path is undefined");
-      }
+      await checkJavaAvailable();
 
       new Notice(`📄 Converting ${this.file.name} to Markdown...`);
 
@@ -590,10 +593,6 @@ class ConvertModal extends Modal {
         if (!fs.existsSync(outputDir)) {
           fs.mkdirSync(outputDir, { recursive: true });
         }
-      }
-
-      if (!this.file.path || typeof this.file.path !== 'string') {
-        throw new Error(`Invalid file path: ${this.file.path}`);
       }
 
       const pdfAbs = path.join(vaultPath, this.file.path);
@@ -616,16 +615,20 @@ class ConvertModal extends Modal {
           : path.join(vaultPath, imageFolder);
 
         // Create a subfolder named after the PDF file to avoid overwriting images from different documents
-        const pdfNameFolder = this.file.basename;
-        const imageDir = path.join(baseImageDir, pdfNameFolder);
-
+        const imageDir = path.join(baseImageDir, this.file.basename);
         if (!fs.existsSync(imageDir)) {
           fs.mkdirSync(imageDir, { recursive: true });
         }
         conversionOptions.imageDir = imageDir;
       }
 
-      await convert(this.pluginDir, [pdfAbs], conversionOptions);
+      const { promise: conversionPromise, process: javaProcess } = convert(this.pluginDir, [pdfAbs], conversionOptions);
+      this.activeProcess = javaProcess;
+      try {
+        await conversionPromise;
+      } finally {
+        this.activeProcess = null;
+      }
 
       const expectedMdPath = path.join(outputDir, this.file.basename + ".md");
       if (!fs.existsSync(expectedMdPath)) {
@@ -641,12 +644,6 @@ class ConvertModal extends Modal {
         fs.renameSync(expectedMdPath, targetMd);
       }
 
-      try {
-        await this.app.vault.adapter.list("/");
-      } catch (e) {
-        // Continue anyway
-      }
-
       this.settings.lastOutputFolder = outputFolder || "";
       this.settings.lastImageFolder = imageFolder || "";
       await this.saveSettings();
@@ -657,21 +654,21 @@ class ConvertModal extends Modal {
       setTimeout(() => this.close(), 1800);
 
     } catch (e: any) {
-      let errorMessage = e.message ?? "Conversion failed";
+      let errorMessage: string;
 
-      if (errorMessage.includes("java")) {
-        errorMessage = "Java is required but not installed. Please install Java Runtime Environment.";
-      } else if (errorMessage.includes("JAR file not found") || errorMessage.includes("Could not locate")) {
+      if (e instanceof JavaNotFoundError) {
+        errorMessage = e.message;
+      } else if (e instanceof JarNotFoundError) {
         errorMessage = "PDF conversion library not found. Please reinstall the plugin.";
-      } else if (errorMessage.includes("hybrid") || errorMessage.includes("Hybrid backend") || errorMessage.includes("localhost:5002") || errorMessage.includes("Connection")) {
+      } else if (e instanceof HybridBackendError) {
         const selectedMode = getMode(this.selectedModeId);
         const command = getHybridServerCommand(selectedMode, this.settings) || "opendataloader-pdf-hybrid --port 5002";
         errorMessage =
           `Hybrid backend is required for this mode.\n\n` +
           `Start it in a terminal first:\n${command}\n\n` +
           `Then retry the conversion.`;
-      } else if (errorMessage.includes("path.join") || errorMessage.includes("path.resolve")) {
-        errorMessage = "Path error: Invalid file or directory path. Please check your vault configuration.";
+      } else {
+        errorMessage = e.message ?? "Conversion failed";
       }
 
       this.setStatus("error", errorMessage);
@@ -704,9 +701,8 @@ class ConvertModal extends Modal {
   }
 
   onClose() {
-    if (this.contentEl) {
-      this.contentEl.empty();
-    }
+    this.activeProcess?.kill("SIGTERM");
+    this.contentEl.empty();
   }
 }
 
@@ -714,20 +710,21 @@ class ConvertModal extends Modal {
 
 class FolderSuggestModal extends SuggestModal<string> {
   private onChoose: (path: string) => void;
+  private folders: string[];
 
   constructor(app: App, onChoose: (path: string) => void) {
     super(app);
     this.onChoose = onChoose;
+    this.folders = app.vault.getAllLoadedFiles()
+      .filter((f): f is TFolder => f instanceof TFolder)
+      .map(f => f.path);
     this.setPlaceholder("Search or type a folder path...");
   }
 
   getSuggestions(query: string): string[] {
-    const folders = this.app.vault.getAllLoadedFiles()
-      .filter((f): f is TFolder => f instanceof TFolder)
-      .map(f => f.path);
     return query
-      ? folders.filter(f => f.toLowerCase().includes(query.toLowerCase()))
-      : folders;
+      ? this.folders.filter(f => f.toLowerCase().includes(query.toLowerCase()))
+      : this.folders;
   }
 
   renderSuggestion(folder: string, el: HTMLElement) {
